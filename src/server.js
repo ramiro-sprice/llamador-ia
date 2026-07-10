@@ -6,9 +6,11 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import OpenAI from 'openai';
 import twilio from 'twilio';
+import multer from 'multer';
 import { WebSocketServer } from 'ws';
-import { createContact, databaseConfigured, initializeDatabase, listContacts, saveCallProgress, saveCallStart, updateContact } from './database.js';
+import { createContact, databaseConfigured, importContacts, initializeDatabase, listContacts, saveCallProgress, saveCallStart, updateContact } from './database.js';
 import { calendarConfigured, createCalendarEvent, schedulingContext } from './calendar.js';
+import { parseContactFile } from './importer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -29,6 +31,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const calls = new Map();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
 const attemptsByIp = new Map();
 const lastCallByNumber = new Map();
 
@@ -147,6 +150,17 @@ app.post('/api/contacts', async (req, res) => {
     if (error?.code === '23505') return res.status(409).json({ error: 'Ese teléfono ya existe en la base.' });
     res.status(500).json({ error: 'No se pudo guardar el contacto.' });
   }
+});
+
+app.post('/api/contacts/import', upload.single('file'), async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
+  if (!req.file) return res.status(400).json({ error: 'Seleccioná un archivo .xlsx o .csv.' });
+  try {
+    const parsed = await parseContactFile(req.file);
+    const imported = await importContacts(parsed.contacts);
+    res.json({ created: imported.created, updated: imported.updated, rejected: [...parsed.rejected, ...imported.rejected] });
+  } catch (error) { res.status(400).json({ error: error.message }); }
 });
 
 app.patch('/api/contacts/:id', async (req, res) => {

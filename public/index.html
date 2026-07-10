@@ -58,6 +58,11 @@ REGLAS ESTRICTAS:
         <div><p class="eyebrow">BASE DE CONTACTOS</p><h2>Números para llamar</h2></div>
         <div class="heading-actions"><button type="button" id="test-calendar" class="secondary">Probar calendario</button><button type="button" id="load-contacts" class="secondary">Cargar contactos</button></div>
       </div>
+      <form id="import-form" class="import-form">
+        <label>Importar Excel o CSV <input type="file" name="file" accept=".xlsx,.csv" required></label>
+        <button type="submit"><span>Importar lista</span><span>↑</span></button>
+        <a class="template-link" href="/plantilla-contactos.csv" download>Descargar plantilla CSV</a>
+      </form>
       <form id="contact-form" class="contact-form">
         <label>Teléfono <input name="phone" placeholder="+5491123456789" required></label>
         <label>Persona <input name="personName" placeholder="Nombre y apellido"></label>
@@ -88,6 +93,7 @@ REGLAS ESTRICTAS:
     const contactForm = document.querySelector('#contact-form');
     const contactResult = document.querySelector('#contact-result');
     const contactsList = document.querySelector('#contacts-list');
+    const importForm = document.querySelector('#import-form');
     let selectedContactId = null;
 
     function updateMode() {
@@ -138,18 +144,14 @@ REGLAS ESTRICTAS:
     });
 
     function renderContacts(contacts) {
-      contactsList.innerHTML = contacts.length ? '' : '<p class="notice">Todavía no hay contactos cargados.</p>';
+      contactsList.innerHTML = contacts.length ? '<div class="crm-row crm-head"><span>Contacto</span><span>Empresa</span><span>Teléfono</span><span>Acción</span><span>Estado</span><span></span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
-        const card = document.createElement('article');
-        card.className = 'contact-card';
-        const title = document.createElement('strong');
-        title.textContent = contact.company_name || contact.person_name || 'Sin nombre';
-        const detail = document.createElement('span');
-        detail.textContent = [contact.person_name, contact.phone, contact.status].filter(Boolean).join(' · ');
+        const card = document.createElement('article'); card.className = 'crm-row';
+        for (const value of [contact.person_name || 'Sin nombre', contact.company_name || 'Sin empresa', contact.phone, contact.action || 'LLAMADA_INICIAL', contact.status]) { const cell=document.createElement('span'); cell.textContent=value; card.append(cell); }
         const callButton = document.createElement('button');
         callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Usar para llamada';
         callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
-        card.append(title, detail, callButton); contactsList.append(card);
+        card.append(callButton); contactsList.append(card);
       }
     }
 
@@ -164,6 +166,20 @@ REGLAS ESTRICTAS:
     }
 
     document.querySelector('#load-contacts').addEventListener('click', loadContacts);
+    importForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const token = adminToken.value;
+      if (!token) { contactResult.textContent = 'Ingresá la clave administrativa arriba.'; contactResult.className = 'error'; return; }
+      const data = new FormData(importForm);
+      contactResult.textContent = 'Importando y validando…';
+      const response = await fetch('/api/contacts/import', { method: 'POST', headers: { 'x-admin-token': token }, body: data });
+      const body = await response.json();
+      if (!response.ok) { contactResult.textContent = body.error; contactResult.className = 'error'; return; }
+      const rejected = body.rejected?.length ? ` Rechazadas: ${body.rejected.length} (filas ${body.rejected.map((item) => item.row).join(', ')}).` : '';
+      contactResult.textContent = `Nuevos: ${body.created}. Actualizados: ${body.updated}.${rejected}`;
+      contactResult.className = body.rejected?.length ? 'error' : 'success';
+      importForm.reset(); loadContacts();
+    });
     document.querySelector('#test-calendar').addEventListener('click', async () => {
       const token = adminToken.value;
       if (!token) { contactResult.textContent = 'Ingresá la clave administrativa arriba.'; contactResult.className = 'error'; return; }

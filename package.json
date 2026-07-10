@@ -9,11 +9,14 @@
     "check": "node --check src/server.js"
   },
   "dependencies": {
+    "csv-parse": "^7.0.1",
     "date-holidays": "^3.32.0",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
+    "multer": "^2.2.0",
     "openai": "^5.12.2",
     "pg": "^8.22.0",
+    "read-excel-file": "^9.3.1",
     "twilio": "^5.8.0",
     "ws": "^8.18.3"
   }

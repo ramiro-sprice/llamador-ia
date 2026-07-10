@@ -22,6 +22,8 @@ export async function initializeDatabase() {
       instagram TEXT,
       facebook TEXT,
       notes TEXT,
+      action TEXT NOT NULL DEFAULT 'LLAMADA_INICIAL',
+      attempts INTEGER NOT NULL DEFAULT 0,
       source TEXT NOT NULL DEFAULT 'manual',
       referred_by UUID REFERENCES contacts(id) ON DELETE SET NULL,
       consent_status TEXT NOT NULL DEFAULT 'unknown',
@@ -35,6 +37,8 @@ export async function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS contacts_status_idx ON contacts(status);
     CREATE INDEX IF NOT EXISTS contacts_next_call_idx ON contacts(next_call_at);
+    ALTER TABLE contacts ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'LLAMADA_INICIAL';
+    ALTER TABLE contacts ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS call_records (
       id UUID PRIMARY KEY,
       reference UUID NOT NULL UNIQUE,
@@ -62,6 +66,29 @@ export async function createContact(contact) {
     RETURNING *
   `, [contact.id, contact.phone, contact.personName || null, contact.companyName || null, contact.role || null, contact.website || null, contact.instagram || null, contact.facebook || null, contact.notes || null, contact.source || 'manual', contact.referredBy || null, contact.consentStatus || 'unknown', contact.status || 'pending']);
   return rows[0];
+}
+
+export async function importContacts(contacts) {
+  const client = await pool.connect();
+  const result = { created: 0, updated: 0, rejected: [] };
+  try {
+    await client.query('BEGIN');
+    for (const [index, contact] of contacts.entries()) {
+      try {
+        const existing = await client.query('SELECT id FROM contacts WHERE phone=$1', [contact.phone]);
+        if (existing.rowCount) {
+          await client.query(`UPDATE contacts SET person_name=COALESCE(NULLIF($1,''),person_name), company_name=COALESCE(NULLIF($2,''),company_name), role=COALESCE(NULLIF($3,''),role), website=COALESCE(NULLIF($4,''),website), instagram=COALESCE(NULLIF($5,''),instagram), facebook=COALESCE(NULLIF($6,''),facebook), notes=COALESCE(NULLIF($7,''),notes), consent_status=$8, action=$9, updated_at=NOW() WHERE phone=$10`, [contact.personName, contact.companyName, contact.role, contact.website, contact.instagram, contact.facebook, contact.notes, contact.consentStatus, contact.action, contact.phone]);
+          result.updated++;
+        } else {
+          await client.query(`INSERT INTO contacts (id,phone,person_name,company_name,role,website,instagram,facebook,notes,consent_status,action,status,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending','import')`, [contact.id, contact.phone, contact.personName, contact.companyName, contact.role, contact.website, contact.instagram, contact.facebook, contact.notes, contact.consentStatus, contact.action]);
+          result.created++;
+        }
+      } catch (error) { result.rejected.push({ row: index + 2, error: error.message }); }
+    }
+    await client.query('COMMIT');
+    return result;
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 export async function updateContact(id, fields) {
