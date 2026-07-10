@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +32,13 @@ function requireConfig(names) {
   if (missing.length) throw new Error(`Falta configurar: ${missing.join(', ')}`);
 }
 
+function validAdminToken(value) {
+  const expected = process.env.CALL_ADMIN_TOKEN || '';
+  const supplied = String(value || '');
+  if (expected.length < 16 || supplied.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, mode: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'simulation-only' });
 });
@@ -44,6 +52,9 @@ app.post('/api/calls', async (req, res) => {
   if (!argentinaNumber(to)) return res.status(400).json({ error: 'Usá formato internacional argentino: +54 seguido del número.' });
   if (!fixedMessage || fixedMessage.length > 1000) return res.status(400).json({ error: 'El mensaje debe tener entre 1 y 1000 caracteres.' });
   if (!instructions || instructions.length > 4000) return res.status(400).json({ error: 'Las instrucciones deben tener entre 1 y 4000 caracteres.' });
+  if (!dryRun && !validAdminToken(req.body.adminToken)) {
+    return res.status(403).json({ error: 'Clave administrativa incorrecta o no configurada.' });
+  }
 
   const reference = crypto.randomUUID();
   calls.set(reference, { to, fixedMessage, instructions, createdAt: Date.now(), status: dryRun ? 'simulated' : 'queued' });

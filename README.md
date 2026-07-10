@@ -18,7 +18,8 @@ Abrí `http://localhost:3000`. El modo simulación viene activado y no consume s
 2. En Twilio, habilitá ConversationRelay y aceptá su anexo de IA.
 3. Exponé el servidor con HTTPS/WSS (por ejemplo, mediante un túnel durante desarrollo) y colocá esa URL en `PUBLIC_URL`.
 4. Verificá en Twilio los permisos de llamadas salientes a Argentina y el identificador de origen permitido.
-5. Reiniciá el servidor, desmarcá “Modo simulación” y probá primero con tu propio teléfono.
+5. Configurá `CALL_ADMIN_TOKEN` con una clave aleatoria de al menos 16 caracteres. Sin ella, las llamadas reales quedan bloqueadas.
+6. Reiniciá el servidor, desmarcá “Modo simulación” y probá primero con tu propio teléfono.
 
 Los números se aceptan en formato E.164 argentino (`+54...`). Los celulares suelen escribirse para llamadas internacionales como `+549` seguido del código de área y número, sin 0 ni 15.
 

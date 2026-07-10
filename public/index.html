@@ -16,6 +16,7 @@
       <label>Mensaje inicial <textarea name="fixedMessage" maxlength="1000" required>Hola. Esta es una llamada automatizada con inteligencia artificial. Luego de este mensaje puede responder.</textarea></label>
       <label>Objetivo de la conversación <textarea name="instructions" maxlength="4000" required>Sos un asistente telefónico amable y breve. Hablá en español rioplatense. Identificate como una IA. Tu objetivo es informar y responder preguntas sobre el motivo de esta llamada. No solicites contraseñas, códigos ni datos financieros.</textarea></label>
       <label class="check"><input type="checkbox" name="dryRun" checked> Modo simulación (no llama ni genera cargos)</label>
+      <label>Clave administrativa <input name="adminToken" type="password" autocomplete="off" placeholder="Necesaria solo para llamadas reales"></label>
       <button type="submit">Preparar llamada <span>→</span></button>
       <p class="notice">Llamá únicamente a personas que hayan dado su consentimiento. No uses esta herramienta para spam, engaño ni emergencias.</p>
     </form>
@@ -28,7 +29,7 @@
       event.preventDefault();
       const data = new FormData(form);
       result.textContent = 'Validando…';
-      const response = await fetch('/api/calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: data.get('to'), fixedMessage: data.get('fixedMessage'), instructions: data.get('instructions'), dryRun: data.get('dryRun') === 'on' }) });
+      const response = await fetch('/api/calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: data.get('to'), fixedMessage: data.get('fixedMessage'), instructions: data.get('instructions'), dryRun: data.get('dryRun') === 'on', adminToken: data.get('adminToken') }) });
       const body = await response.json();
       result.textContent = response.ok ? (body.message || `Llamada iniciada. Referencia: ${body.reference}`) : body.error;
       result.className = response.ok ? 'success' : 'error';
