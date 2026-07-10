@@ -92,7 +92,7 @@ export async function importContacts(contacts) {
 }
 
 export async function updateContact(id, fields) {
-  const allowed = { personName:'person_name', companyName:'company_name', role:'role', website:'website', instagram:'instagram', facebook:'facebook', notes:'notes', consentStatus:'consent_status', status:'status', preferredDay:'preferred_day', preferredPeriod:'preferred_period', nextCallAt:'next_call_at' };
+  const allowed = { personName:'person_name', companyName:'company_name', role:'role', website:'website', instagram:'instagram', facebook:'facebook', notes:'notes', consentStatus:'consent_status', status:'status', action:'action', preferredDay:'preferred_day', preferredPeriod:'preferred_period', nextCallAt:'next_call_at' };
   const entries = Object.entries(fields).filter(([key]) => allowed[key]);
   if (!entries.length) return null;
   const values = entries.map(([, value]) => value === '' ? null : value);

@@ -58,6 +58,10 @@ REGLAS ESTRICTAS:
         <div><p class="eyebrow">BASE DE CONTACTOS</p><h2>Números para llamar</h2></div>
         <div class="heading-actions"><button type="button" id="test-calendar" class="secondary">Probar calendario</button><button type="button" id="load-contacts" class="secondary">Cargar contactos</button></div>
       </div>
+      <div class="crm-toolbar">
+        <label>Buscar <input id="contact-search" type="search" placeholder="Nombre, empresa o teléfono"></label>
+        <span id="save-indicator">Sin cambios pendientes</span>
+      </div>
       <form id="import-form" class="import-form">
         <label>Importar Excel o CSV <input type="file" name="file" accept=".xlsx,.csv" required></label>
         <button type="submit"><span>Importar lista</span><span>↑</span></button>
@@ -96,7 +100,10 @@ REGLAS ESTRICTAS:
     const contactsList = document.querySelector('#contacts-list');
     const importForm = document.querySelector('#import-form');
     const importResult = document.querySelector('#import-result');
+    const searchInput = document.querySelector('#contact-search');
+    const saveIndicator = document.querySelector('#save-indicator');
     let selectedContactId = null;
+    let loadedContacts = [];
 
     function updateMode() {
       adminToken.required = !dryRun.checked;
@@ -145,11 +152,34 @@ REGLAS ESTRICTAS:
       }
     });
 
-    function renderContacts(contacts) {
-      contactsList.innerHTML = contacts.length ? '<div class="crm-row crm-head"><span>Contacto</span><span>Empresa</span><span>Teléfono</span><span>Acción</span><span>Estado</span><span></span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
+    async function saveCell(contact, field, value) {
+      saveIndicator.textContent = 'Guardando…';
+      const response = await fetch(`/api/contacts/${contact.id}`, { method:'PATCH', headers:{ 'content-type':'application/json', 'x-admin-token':adminToken.value }, body:JSON.stringify({ [field]:value }) });
+      if (response.ok) { contact[field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value; saveIndicator.textContent = 'Guardado'; return true; }
+      else { const body=await response.json(); saveIndicator.textContent = body.error || 'Error al guardar'; saveIndicator.className='error-text'; }
+      return false;
+    }
+
+    function editableCell(contact, field, value, type='text') {
+      const input=document.createElement(type === 'select' ? 'select' : 'input');
+      if (type === 'select') {
+        const choices = field === 'consentStatus' ? [['unknown','Sin confirmar'],['granted','Autorizado'],['denied','No contactar']] : field === 'status' ? [['pending','Pendiente'],['contacted','Contactado'],['scheduled','Agendado'],['completed','Finalizado'],['do-not-call','No llamar']] : [['LLAMADA_INICIAL','Llamada inicial'],['REINTENTAR','Reintentar'],['SEGUIMIENTO','Seguimiento'],['LLAMAR_DERIVADO','Llamar derivado'],['CONFIRMAR_REUNION','Confirmar reunión'],['REVISION_HUMANA','Revisión humana'],['NO_LLAMAR','No llamar']];
+        for (const [key,label] of choices) { const option=document.createElement('option'); option.value=key; option.textContent=label; input.append(option); }
+      }
+      input.value=value || ''; input.dataset.saved=input.value; input.className='grid-input'; input.setAttribute('aria-label',field);
+      input.addEventListener(type === 'select' ? 'change' : 'blur', async () => { if (input.value !== input.dataset.saved && await saveCell(contact,field,input.value)) input.dataset.saved=input.value; });
+      return input;
+    }
+
+    function renderContacts(contacts, preserveSource=true) {
+      if (preserveSource) loadedContacts = contacts;
+      contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><span>Nombre</span><span>Empresa</span><span>Cargo</span><span>Teléfono</span><span>Web</span><span>Instagram</span><span>Facebook</span><span>Consentimiento</span><span>Acción IA</span><span>Estado</span><span>Intentos</span><span>Notas</span><span></span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
-        const card = document.createElement('article'); card.className = 'crm-row';
-        for (const value of [contact.person_name || 'Sin nombre', contact.company_name || 'Sin empresa', contact.phone, contact.action || 'LLAMADA_INICIAL', contact.status]) { const cell=document.createElement('span'); cell.textContent=value; card.append(cell); }
+        const card = document.createElement('article'); card.className = 'sheet-row';
+        card.append(editableCell(contact,'personName',contact.person_name), editableCell(contact,'companyName',contact.company_name), editableCell(contact,'role',contact.role));
+        const phone=document.createElement('span'); phone.className='fixed-cell'; phone.textContent=contact.phone; card.append(phone);
+        card.append(editableCell(contact,'website',contact.website), editableCell(contact,'instagram',contact.instagram), editableCell(contact,'facebook',contact.facebook), editableCell(contact,'consentStatus',contact.consent_status,'select'), editableCell(contact,'action',contact.action,'select'), editableCell(contact,'status',contact.status,'select'));
+        const attempts=document.createElement('span'); attempts.className='fixed-cell'; attempts.textContent=contact.attempts || 0; card.append(attempts, editableCell(contact,'notes',contact.notes));
         const callButton = document.createElement('button');
         callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Usar para llamada';
         callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
@@ -165,7 +195,16 @@ REGLAS ESTRICTAS:
       if (!response.ok) { contactResult.textContent = body.error; contactResult.className = 'error'; return; }
       contactResult.textContent = `${body.contacts.length} contacto(s) cargado(s).`; contactResult.className = 'success';
       renderContacts(body.contacts);
+      sessionStorage.setItem('crmAdminToken', token);
     }
+
+    searchInput.addEventListener('input', () => {
+      const query=searchInput.value.toLowerCase().trim();
+      renderContacts(query ? loadedContacts.filter((contact) => [contact.person_name,contact.company_name,contact.phone].some((value)=>String(value||'').toLowerCase().includes(query))) : loadedContacts, false);
+    });
+
+    const savedToken=sessionStorage.getItem('crmAdminToken');
+    if (savedToken) { adminToken.value=savedToken; loadContacts(); }
 
     document.querySelector('#load-contacts').addEventListener('click', loadContacts);
     importForm.addEventListener('submit', async (event) => {
