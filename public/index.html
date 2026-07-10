@@ -63,6 +63,7 @@ REGLAS ESTRICTAS:
         <button type="submit"><span>Importar lista</span><span>↑</span></button>
         <a class="template-link" href="/plantilla-contactos.csv" download>Descargar plantilla CSV</a>
       </form>
+      <output id="import-result" aria-live="polite"></output>
       <form id="contact-form" class="contact-form">
         <label>Teléfono <input name="phone" placeholder="+5491123456789" required></label>
         <label>Persona <input name="personName" placeholder="Nombre y apellido"></label>
@@ -94,6 +95,7 @@ REGLAS ESTRICTAS:
     const contactResult = document.querySelector('#contact-result');
     const contactsList = document.querySelector('#contacts-list');
     const importForm = document.querySelector('#import-form');
+    const importResult = document.querySelector('#import-result');
     let selectedContactId = null;
 
     function updateMode() {
@@ -169,16 +171,19 @@ REGLAS ESTRICTAS:
     importForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       const token = adminToken.value;
-      if (!token) { contactResult.textContent = 'Ingresá la clave administrativa arriba.'; contactResult.className = 'error'; return; }
+      if (!token) { importResult.textContent = 'Ingresá la clave administrativa arriba.'; importResult.className = 'error'; return; }
       const data = new FormData(importForm);
-      contactResult.textContent = 'Importando y validando…';
-      const response = await fetch('/api/contacts/import', { method: 'POST', headers: { 'x-admin-token': token }, body: data });
-      const body = await response.json();
-      if (!response.ok) { contactResult.textContent = body.error; contactResult.className = 'error'; return; }
-      const rejected = body.rejected?.length ? ` Rechazadas: ${body.rejected.length} (filas ${body.rejected.map((item) => item.row).join(', ')}).` : '';
-      contactResult.textContent = `Nuevos: ${body.created}. Actualizados: ${body.updated}.${rejected}`;
-      contactResult.className = body.rejected?.length ? 'error' : 'success';
-      importForm.reset(); loadContacts();
+      importResult.textContent = 'Importando y validando…'; importResult.className = '';
+      try {
+        const response = await fetch('/api/contacts/import', { method: 'POST', headers: { 'x-admin-token': token }, body: data });
+        const text = await response.text();
+        let body; try { body = JSON.parse(text); } catch { body = { error: 'El servidor no pudo interpretar el archivo. Verificá que sea un Excel .xlsx real y no un archivo renombrado.' }; }
+        if (!response.ok) { importResult.textContent = body.error; importResult.className = 'error'; return; }
+        const rejected = body.rejected?.length ? ` Rechazadas: ${body.rejected.length} (filas ${body.rejected.map((item) => item.row).join(', ')}).` : '';
+        importResult.textContent = `Nuevos: ${body.created}. Actualizados: ${body.updated}.${rejected}`;
+        importResult.className = body.rejected?.length ? 'error' : 'success';
+        importForm.reset(); loadContacts();
+      } catch { importResult.textContent = 'No se pudo enviar el archivo. Reintentá cuando el servicio esté activo.'; importResult.className = 'error'; }
     });
     document.querySelector('#test-calendar').addEventListener('click', async () => {
       const token = adminToken.value;

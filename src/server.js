@@ -370,6 +370,15 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000).unref();
 
+app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) {
+    const message = error.code === 'LIMIT_FILE_SIZE' ? 'El archivo supera el límite de 2 MB.' : 'No se pudo recibir el archivo.';
+    return res.status(400).json({ error: message });
+  }
+  console.error('Error HTTP no controlado:', error?.message || 'unknown');
+  res.status(500).json({ error: 'Ocurrió un error inesperado.' });
+});
+
 initializeDatabase()
   .then(() => server.listen(port, () => console.log(`Llamador IA disponible en http://localhost:${port}`)))
   .catch((error) => { console.error('No se pudo inicializar PostgreSQL:', error.message); process.exit(1); });
