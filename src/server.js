@@ -33,14 +33,18 @@ function requireConfig(names) {
 }
 
 function validAdminToken(value) {
-  const expected = process.env.CALL_ADMIN_TOKEN || '';
-  const supplied = String(value || '');
+  const expected = String(process.env.CALL_ADMIN_TOKEN || '').trim();
+  const supplied = String(value || '').trim();
   if (expected.length < 16 || supplied.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
 }
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, mode: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'simulation-only' });
+  res.json({
+    ok: true,
+    mode: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'simulation-only',
+    adminConfigured: String(process.env.CALL_ADMIN_TOKEN || '').trim().length >= 16,
+  });
 });
 
 app.post('/api/calls', async (req, res) => {
