@@ -8,6 +8,7 @@ import OpenAI from 'openai';
 import twilio from 'twilio';
 import { WebSocketServer } from 'ws';
 import { createContact, databaseConfigured, initializeDatabase, listContacts, saveCallProgress, saveCallStart, updateContact } from './database.js';
+import { calendarConfigured, createCalendarEvent, schedulingContext } from './calendar.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -82,7 +83,24 @@ function publicCall(reference, call) {
     hasError: Boolean(call.error),
     error: call.error || null,
     conversationTurns: call.transcript?.length || 0,
+    appointmentCreated: Boolean(call.appointment?.eventId),
   };
+}
+
+async function detectConfirmedAppointment(call, history) {
+  if (!openai || call.appointment?.eventId) return null;
+  const conversation = history.map((item) => `${item.role === 'user' ? 'CONTACTO' : 'ASISTENTE'}: ${item.content}`).join('\n');
+  if (!/llamad|agenda|horario|mañana|tarde|lunes|martes|miércoles|jueves|viernes/i.test(conversation)) return null;
+  const extraction = await openai.responses.create({
+    model,
+    instructions: `Extraé una cita solamente si el contacto aceptó explícitamente una segunda llamada y quedaron definidos día y franja. ${schedulingContext()} Devolvé exclusivamente JSON válido, sin markdown: {"confirmed":boolean,"start":"ISO 8601 con -03:00","end":"ISO 8601 con -03:00","personName":string,"companyName":string,"role":string,"serviceInterest":string,"mainNeed":string,"website":string,"instagram":string,"facebook":string,"summary":string}. Para mañana usá 10:00; para tarde usá 15:00; duración 30 minutos. Si no hay confirmación inequívoca, confirmed debe ser false y start/end vacíos.`,
+    input: conversation,
+    max_output_tokens: 500,
+  });
+  try {
+    const parsed = JSON.parse(extraction.output_text.replace(/^```json\s*|\s*```$/g, '').trim());
+    return parsed.confirmed && parsed.start && parsed.end ? parsed : null;
+  } catch { return null; }
 }
 
 app.get('/api/health', (_req, res) => {
@@ -91,6 +109,7 @@ app.get('/api/health', (_req, res) => {
     mode: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'simulation-only',
     adminConfigured: String(process.env.CALL_ADMIN_TOKEN || '').trim().length >= 16,
     databaseConfigured: databaseConfigured(),
+    calendarConfigured: calendarConfigured(),
   });
 });
 
@@ -247,7 +266,7 @@ wss.on('connection', (ws) => {
       if (!openai) throw new Error('OPENAI_NOT_CONFIGURED');
       const stream = await openai.responses.create({
         model,
-        instructions: call.instructions,
+        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLA DE AGENDA: no afirmes que una cita quedó agendada. Cuando el contacto acepte día y franja, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.`,
         input: history,
         stream: true,
         max_output_tokens: 250,
@@ -267,6 +286,32 @@ wss.on('connection', (ws) => {
       call.transcript.push({ user: userText, assistant: answer, at: Date.now() });
       call.updatedAt = Date.now();
       saveCallProgress(call.reference, call).catch(() => {});
+      const appointment = await detectConfirmedAppointment(call, history);
+      if (appointment) {
+        const calendar = await createCalendarEvent({
+          ...appointment,
+          phone: call.to,
+          firstCallAt: new Date(call.createdAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
+        });
+        if (calendar.ok) {
+          call.appointment = { ...appointment, eventId: calendar.eventId };
+          if (call.contactId) await updateContact(call.contactId, {
+            personName: appointment.personName,
+            companyName: appointment.companyName,
+            role: appointment.role,
+            website: appointment.website,
+            instagram: appointment.instagram,
+            facebook: appointment.facebook,
+            nextCallAt: appointment.start,
+            preferredPeriod: new Date(appointment.start).getHours() < 12 ? 'mañana' : 'tarde',
+            status: 'scheduled',
+          });
+          ws.send(JSON.stringify({ type: 'text', token: 'Perfecto. La segunda llamada quedó agendada y confirmada.', last: true, interruptible: true }));
+        } else {
+          call.error = `No se pudo crear la cita: ${calendar.error}`;
+          ws.send(JSON.stringify({ type: 'text', token: 'No pude confirmar el calendario en este momento. Un asesor verificará el horario antes de llamarte.', last: true, interruptible: true }));
+        }
+      }
     } catch (error) {
       ws.send(JSON.stringify({ type: 'text', token: 'Disculpá, tuve un problema técnico. La llamada finalizará.', last: true }));
       call.error = error?.status === 401 ? 'OpenAI rechazó la credencial.' : error?.status === 429 ? 'OpenAI no tiene cuota disponible.' : 'No se pudo generar la respuesta.';
