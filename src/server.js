@@ -99,7 +99,7 @@ app.post('/twilio/voice', (req, res) => {
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
     welcomeGreeting: call.fixedMessage,
     welcomeGreetingInterruptible: 'none',
-    language: 'es-AR',
+    language: 'es-US',
     interruptible: 'speech',
   });
   relay.parameter({ name: 'reference', value: String(req.query.reference) });
