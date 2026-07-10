@@ -93,13 +93,13 @@ async function detectConfirmedAppointment(call, history) {
   if (!/llamad|agenda|horario|mañana|tarde|lunes|martes|miércoles|jueves|viernes/i.test(conversation)) return null;
   const extraction = await openai.responses.create({
     model,
-    instructions: `Extraé una cita solamente si el contacto aceptó explícitamente una segunda llamada y quedaron definidos día y franja. ${schedulingContext()} Devolvé exclusivamente JSON válido, sin markdown: {"confirmed":boolean,"start":"ISO 8601 con -03:00","end":"ISO 8601 con -03:00","personName":string,"companyName":string,"role":string,"serviceInterest":string,"mainNeed":string,"website":string,"instagram":string,"facebook":string,"summary":string}. Para mañana usá 10:00; para tarde usá 15:00; duración 30 minutos. Si no hay confirmación inequívoca, confirmed debe ser false y start/end vacíos.`,
+    instructions: `Extraé una cita solamente si el contacto aceptó explícitamente una segunda llamada, quedaron definidos día y franja, y fueron informados el nombre de la persona y el nombre de la empresa o emprendimiento. ${schedulingContext()} Devolvé exclusivamente JSON válido, sin markdown: {"confirmed":boolean,"start":"ISO 8601 con -03:00","end":"ISO 8601 con -03:00","personName":string,"companyName":string,"role":string,"serviceInterest":string,"mainNeed":string,"website":string,"instagram":string,"facebook":string,"summary":string}. Para mañana usá 10:00; para tarde usá 15:00; duración 30 minutos. Si falta nombre, empresa, día, franja o confirmación inequívoca, confirmed debe ser false y start/end vacíos. En website/instagram/facebook copiá únicamente direcciones o usuarios explícitos; nunca escribas “sí”.`,
     input: conversation,
     max_output_tokens: 500,
   });
   try {
     const parsed = JSON.parse(extraction.output_text.replace(/^```json\s*|\s*```$/g, '').trim());
-    return parsed.confirmed && parsed.start && parsed.end ? parsed : null;
+    return parsed.confirmed && parsed.start && parsed.end && parsed.personName && parsed.companyName ? parsed : null;
   } catch { return null; }
 }
 
@@ -281,7 +281,7 @@ wss.on('connection', (ws) => {
       if (!openai) throw new Error('OPENAI_NOT_CONFIGURED');
       const stream = await openai.responses.create({
         model,
-        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLA DE AGENDA: no afirmes que una cita quedó agendada. Cuando el contacto acepte día y franja, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.`,
+        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLAS OBLIGATORIAS PARA AGENDAR: antes de proponer o confirmar una segunda llamada, obtené el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá el cargo de forma natural; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta nombre, empresa, día y franja. No afirmes que una cita quedó agendada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.`,
         input: history,
         stream: true,
         max_output_tokens: 250,
@@ -306,7 +306,7 @@ wss.on('connection', (ws) => {
         const calendar = await createCalendarEvent({
           ...appointment,
           phone: call.to,
-          firstCallAt: new Date(call.createdAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }),
+          firstCallAt: new Date(call.createdAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
         });
         if (calendar.ok) {
           call.appointment = { ...appointment, eventId: calendar.eventId };
