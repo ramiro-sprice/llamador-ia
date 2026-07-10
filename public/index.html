@@ -54,7 +54,7 @@ REGLAS ESTRICTAS:
     <section class="contacts-section">
       <div class="section-heading">
         <div><p class="eyebrow">BASE DE CONTACTOS</p><h2>Números para llamar</h2></div>
-        <button type="button" id="load-contacts" class="secondary">Cargar contactos</button>
+        <div class="heading-actions"><button type="button" id="test-calendar" class="secondary">Probar calendario</button><button type="button" id="load-contacts" class="secondary">Cargar contactos</button></div>
       </div>
       <form id="contact-form" class="contact-form">
         <label>Teléfono <input name="phone" placeholder="+5491123456789" required></label>
@@ -162,6 +162,15 @@ REGLAS ESTRICTAS:
     }
 
     document.querySelector('#load-contacts').addEventListener('click', loadContacts);
+    document.querySelector('#test-calendar').addEventListener('click', async () => {
+      const token = adminToken.value;
+      if (!token) { contactResult.textContent = 'Ingresá la clave administrativa arriba.'; contactResult.className = 'error'; return; }
+      contactResult.textContent = 'Probando conexión con Google Calendar…';
+      const response = await fetch('/api/calendar/test', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-token': token } });
+      const body = await response.json();
+      contactResult.textContent = response.ok ? body.message : body.error;
+      contactResult.className = response.ok ? 'success' : 'error';
+    });
     contactForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       const token = adminToken.value;

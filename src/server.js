@@ -120,6 +120,21 @@ app.get('/api/contacts', async (req, res) => {
   catch { res.status(500).json({ error: 'No se pudieron cargar los contactos.' }); }
 });
 
+app.post('/api/calendar/test', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!calendarConfigured()) return res.status(503).json({ error: 'El calendario no está configurado.' });
+  try {
+    const result = await createCalendarEvent({
+      start: '2020-01-02T10:00:00-03:00',
+      end: '2020-01-02T10:30:00-03:00',
+      personName: 'Prueba de conexión',
+      companyName: 'Sprice',
+    });
+    if (result.error === 'El horario debe ser futuro') return res.json({ ok: true, message: 'Google Calendar está conectado y autenticado.' });
+    res.status(502).json({ error: result.error || 'Apps Script respondió de forma inesperada.' });
+  } catch { res.status(502).json({ error: 'No se pudo conectar con Google Apps Script.' }); }
+});
+
 app.post('/api/contacts', async (req, res) => {
   if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
   if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
