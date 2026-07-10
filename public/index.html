@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Llamador IA</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">ARGENTINA · LLAMADAS CON IA</p>
+    <h1>Una llamada clara,<br><em>antes de marcar.</em></h1>
+    <p class="intro">Reproduce un aviso fijo y, después, conversa en español rioplatense mediante inteligencia artificial.</p>
+    <form id="call-form">
+      <label>Número argentino <input name="to" placeholder="+5491123456789" required></label>
+      <label>Mensaje inicial <textarea name="fixedMessage" maxlength="1000" required>Hola. Esta es una llamada automatizada con inteligencia artificial. Luego de este mensaje puede responder.</textarea></label>
+      <label>Objetivo de la conversación <textarea name="instructions" maxlength="4000" required>Sos un asistente telefónico amable y breve. Hablá en español rioplatense. Identificate como una IA. Tu objetivo es informar y responder preguntas sobre el motivo de esta llamada. No solicites contraseñas, códigos ni datos financieros.</textarea></label>
+      <label class="check"><input type="checkbox" name="dryRun" checked> Modo simulación (no llama ni genera cargos)</label>
+      <button type="submit">Preparar llamada <span>→</span></button>
+      <p class="notice">Llamá únicamente a personas que hayan dado su consentimiento. No uses esta herramienta para spam, engaño ni emergencias.</p>
+    </form>
+    <output id="result" aria-live="polite"></output>
+  </main>
+  <script>
+    const form = document.querySelector('#call-form');
+    const result = document.querySelector('#result');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      result.textContent = 'Validando…';
+      const response = await fetch('/api/calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: data.get('to'), fixedMessage: data.get('fixedMessage'), instructions: data.get('instructions'), dryRun: data.get('dryRun') === 'on' }) });
+      const body = await response.json();
+      result.textContent = response.ok ? (body.message || `Llamada iniciada. Referencia: ${body.reference}`) : body.error;
+      result.className = response.ok ? 'success' : 'error';
+    });
+  </script>
+</body>
+</html>
