@@ -87,7 +87,13 @@ app.post('/api/calls', async (req, res) => {
 app.get('/api/calls/:reference', (req, res) => {
   const call = calls.get(req.params.reference);
   if (!call) return res.status(404).json({ error: 'Llamada no encontrada.' });
-  res.json({ ...call, instructions: undefined });
+  res.json({
+    reference: req.params.reference,
+    status: call.status,
+    createdAt: call.createdAt,
+    hasError: Boolean(call.error),
+    conversationTurns: call.transcript?.length || 0,
+  });
 });
 
 app.post('/twilio/voice', (req, res) => {
@@ -158,7 +164,8 @@ wss.on('connection', (ws) => {
       call.transcript = [...(call.transcript || []), { user: userText, assistant: answer }];
     } catch (error) {
       ws.send(JSON.stringify({ type: 'text', token: 'Disculpá, tuve un problema técnico. La llamada finalizará.', last: true }));
-      call.error = error.message;
+      call.error = error?.status === 401 ? 'OPENAI_AUTHENTICATION_FAILED' : 'AI_RESPONSE_FAILED';
+      console.error('Error de IA durante llamada:', call.error);
     }
   });
 });
