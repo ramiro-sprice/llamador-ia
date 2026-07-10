@@ -51,6 +51,26 @@ REGLAS ESTRICTAS:
       </div>
       <p id="status-error" class="error-text"></p>
     </section>
+    <section class="contacts-section">
+      <div class="section-heading">
+        <div><p class="eyebrow">BASE DE CONTACTOS</p><h2>Números para llamar</h2></div>
+        <button type="button" id="load-contacts" class="secondary">Cargar contactos</button>
+      </div>
+      <form id="contact-form" class="contact-form">
+        <label>Teléfono <input name="phone" placeholder="+5491123456789" required></label>
+        <label>Persona <input name="personName" placeholder="Nombre y apellido"></label>
+        <label>Empresa <input name="companyName" placeholder="Empresa o emprendimiento"></label>
+        <label>Cargo <input name="role" placeholder="Dueño, marketing, ventas…"></label>
+        <label>Sitio web <input name="website" type="url" placeholder="https://"></label>
+        <label>Instagram <input name="instagram" placeholder="@usuario o URL"></label>
+        <label>Facebook <input name="facebook" placeholder="Nombre o URL"></label>
+        <label>Consentimiento <select name="consentStatus"><option value="unknown">Sin confirmar</option><option value="granted">Autorizado</option><option value="denied">No contactar</option></select></label>
+        <label class="wide">Notas <textarea name="notes" placeholder="Actividad, origen del contacto y contexto"></textarea></label>
+        <button type="submit" class="wide"><span>Guardar contacto</span><span>＋</span></button>
+      </form>
+      <output id="contact-result" aria-live="polite"></output>
+      <div id="contacts-list" class="contacts-list"></div>
+    </section>
   </main>
   <script>
     const form = document.querySelector('#call-form');
@@ -63,6 +83,10 @@ REGLAS ESTRICTAS:
     const statusValue = document.querySelector('#status-value');
     const turnsValue = document.querySelector('#turns-value');
     const statusError = document.querySelector('#status-error');
+    const contactForm = document.querySelector('#contact-form');
+    const contactResult = document.querySelector('#contact-result');
+    const contactsList = document.querySelector('#contacts-list');
+    let selectedContactId = null;
 
     function updateMode() {
       adminToken.required = !dryRun.checked;
@@ -98,7 +122,7 @@ REGLAS ESTRICTAS:
       button.disabled = true;
       result.textContent = dryRun.checked ? 'Validando…' : 'Solicitando llamada…';
       try {
-        const response = await fetch('/api/calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: data.get('to'), fixedMessage: data.get('fixedMessage'), instructions: data.get('instructions'), dryRun: dryRun.checked, adminToken: data.get('adminToken') }) });
+        const response = await fetch('/api/calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: data.get('to'), contactId: selectedContactId, fixedMessage: data.get('fixedMessage'), instructions: data.get('instructions'), dryRun: dryRun.checked, adminToken: data.get('adminToken') }) });
         const body = await response.json();
         result.textContent = response.ok ? (body.message || `Llamada iniciada. Referencia: ${body.reference}`) : body.error;
         result.className = response.ok ? 'success' : 'error';
@@ -109,6 +133,45 @@ REGLAS ESTRICTAS:
       } finally {
         button.disabled = false;
       }
+    });
+
+    function renderContacts(contacts) {
+      contactsList.innerHTML = contacts.length ? '' : '<p class="notice">Todavía no hay contactos cargados.</p>';
+      for (const contact of contacts) {
+        const card = document.createElement('article');
+        card.className = 'contact-card';
+        const title = document.createElement('strong');
+        title.textContent = contact.company_name || contact.person_name || 'Sin nombre';
+        const detail = document.createElement('span');
+        detail.textContent = [contact.person_name, contact.phone, contact.status].filter(Boolean).join(' · ');
+        const callButton = document.createElement('button');
+        callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Usar para llamada';
+        callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
+        card.append(title, detail, callButton); contactsList.append(card);
+      }
+    }
+
+    async function loadContacts() {
+      const token = adminToken.value;
+      if (!token) { contactResult.textContent = 'Ingresá la clave administrativa arriba.'; contactResult.className = 'error'; return; }
+      const response = await fetch('/api/contacts', { headers: { 'x-admin-token': token } });
+      const body = await response.json();
+      if (!response.ok) { contactResult.textContent = body.error; contactResult.className = 'error'; return; }
+      contactResult.textContent = `${body.contacts.length} contacto(s) cargado(s).`; contactResult.className = 'success';
+      renderContacts(body.contacts);
+    }
+
+    document.querySelector('#load-contacts').addEventListener('click', loadContacts);
+    contactForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const token = adminToken.value;
+      if (!token) { contactResult.textContent = 'Ingresá la clave administrativa arriba.'; contactResult.className = 'error'; return; }
+      const values = Object.fromEntries(new FormData(contactForm));
+      const response = await fetch('/api/contacts', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-token': token }, body: JSON.stringify(values) });
+      const body = await response.json();
+      contactResult.textContent = response.ok ? 'Contacto guardado.' : body.error;
+      contactResult.className = response.ok ? 'success' : 'error';
+      if (response.ok) { contactForm.reset(); loadContacts(); }
     });
   </script>
 </body>

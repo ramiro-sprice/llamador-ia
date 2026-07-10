@@ -7,6 +7,7 @@ import express from 'express';
 import OpenAI from 'openai';
 import twilio from 'twilio';
 import { WebSocketServer } from 'ws';
+import { createContact, databaseConfigured, initializeDatabase, listContacts, saveCallProgress, saveCallStart, updateContact } from './database.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -89,13 +90,46 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     mode: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'simulation-only',
     adminConfigured: String(process.env.CALL_ADMIN_TOKEN || '').trim().length >= 16,
+    databaseConfigured: databaseConfigured(),
   });
+});
+
+app.get('/api/contacts', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
+  try { res.json({ contacts: await listContacts() }); }
+  catch { res.status(500).json({ error: 'No se pudieron cargar los contactos.' }); }
+});
+
+app.post('/api/contacts', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
+  const phone = String(req.body.phone || '').replace(/[\s()-]/g, '');
+  if (!argentinaNumber(phone)) return res.status(400).json({ error: 'El teléfono debe estar en formato internacional argentino +54.' });
+  try {
+    const contact = await createContact({ ...req.body, id: crypto.randomUUID(), phone });
+    res.status(201).json({ contact });
+  } catch (error) {
+    if (error?.code === '23505') return res.status(409).json({ error: 'Ese teléfono ya existe en la base.' });
+    res.status(500).json({ error: 'No se pudo guardar el contacto.' });
+  }
+});
+
+app.patch('/api/contacts/:id', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
+  try {
+    const contact = await updateContact(req.params.id, req.body);
+    if (!contact) return res.status(404).json({ error: 'Contacto no encontrado o sin cambios.' });
+    res.json({ contact });
+  } catch { res.status(500).json({ error: 'No se pudo actualizar el contacto.' }); }
 });
 
 app.post('/api/calls', async (req, res) => {
   const to = String(req.body.to || '').replace(/[\s()-]/g, '');
   const fixedMessage = String(req.body.fixedMessage || '').trim();
   const instructions = String(req.body.instructions || '').trim();
+  const contactId = String(req.body.contactId || '').trim() || null;
   const dryRun = req.body.dryRun !== false;
 
   if (!argentinaNumber(to)) return res.status(400).json({ error: 'Usá formato internacional argentino: +54 seguido del número.' });
@@ -110,7 +144,7 @@ app.post('/api/calls', async (req, res) => {
   }
 
   const reference = crypto.randomUUID();
-  calls.set(reference, { to, fixedMessage, instructions, createdAt: Date.now(), updatedAt: Date.now(), status: dryRun ? 'simulated' : 'queued', transcript: [] });
+  calls.set(reference, { reference, to, contactId, fixedMessage, instructions, createdAt: Date.now(), updatedAt: Date.now(), status: dryRun ? 'simulated' : 'queued', transcript: [] });
   if (dryRun) return res.json({ ok: true, dryRun: true, reference, message: 'Simulación válida; no se realizó ninguna llamada.' });
 
   try {
@@ -126,6 +160,7 @@ app.post('/api/calls', async (req, res) => {
       timeLimit: maxCallSeconds,
     });
     calls.get(reference).sid = call.sid;
+    await saveCallStart(reference, contactId, call.sid, 'queued');
     res.json({ ok: true, dryRun: false, reference, sid: call.sid });
   } catch (error) {
     calls.get(reference).status = 'failed';
@@ -163,6 +198,7 @@ app.post('/twilio/status', (req, res) => {
   if (call) {
     call.status = req.body.CallStatus || call.status;
     call.updatedAt = Date.now();
+    saveCallProgress(String(req.query.reference || ''), call).catch(() => {});
   }
   res.sendStatus(204);
 });
@@ -230,6 +266,7 @@ wss.on('connection', (ws) => {
       if (history.length > 24) history.splice(0, history.length - 24);
       call.transcript.push({ user: userText, assistant: answer, at: Date.now() });
       call.updatedAt = Date.now();
+      saveCallProgress(call.reference, call).catch(() => {});
     } catch (error) {
       ws.send(JSON.stringify({ type: 'text', token: 'Disculpá, tuve un problema técnico. La llamada finalizará.', last: true }));
       call.error = error?.status === 401 ? 'OpenAI rechazó la credencial.' : error?.status === 429 ? 'OpenAI no tiene cuota disponible.' : 'No se pudo generar la respuesta.';
@@ -259,4 +296,6 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000).unref();
 
-server.listen(port, () => console.log(`Llamador IA disponible en http://localhost:${port}`));
+initializeDatabase()
+  .then(() => server.listen(port, () => console.log(`Llamador IA disponible en http://localhost:${port}`)))
+  .catch((error) => { console.error('No se pudo inicializar PostgreSQL:', error.message); process.exit(1); });

@@ -30,3 +30,9 @@ Los números se aceptan en formato E.164 argentino (`+54...`). Los celulares sue
 - La duración predeterminada es cinco minutos y tiene un límite técnico de quince.
 - Este MVP guarda estado y transcripciones solo en memoria: se pierden al reiniciar.
 - Antes de producción, agregá autenticación al panel, persistencia cifrada, control de acceso, rate limiting, validación de firmas Twilio y una revisión legal argentina específica para tu caso de uso.
+
+## Base de contactos
+
+La aplicación usa PostgreSQL cuando `DATABASE_URL` está configurada. Al iniciar crea automáticamente las tablas `contacts` y `call_records`. En Render, creá una base Postgres en la misma región y agregá su Internal Database URL como variable `DATABASE_URL` del servicio web.
+
+El plan gratuito de Render Postgres sirve para pruebas, pero expira a los 30 días y no tiene backups. Para conservar contactos reales, usá un plan persistente con copias de seguridad.
