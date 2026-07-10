@@ -10,18 +10,25 @@ import { WebSocketServer } from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const port = Number(process.env.PORT || 3000);
 const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const maxCallSeconds = Math.min(Number(process.env.MAX_CALL_SECONDS || 300), 900);
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const RATE_WINDOW_MS = 10 * 60 * 1000;
+const RATE_MAX_CALLS = 5;
+const NUMBER_COOLDOWN_MS = 60 * 1000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const calls = new Map();
+const attemptsByIp = new Map();
+const lastCallByNumber = new Map();
 
 function argentinaNumber(value) {
   return /^\+54\d{10,13}$/.test(String(value || '').replace(/[\s()-]/g, ''));
@@ -37,6 +44,44 @@ function validAdminToken(value) {
   const supplied = String(value || '').trim();
   if (expected.length < 16 || supplied.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+}
+
+function adminTokenFrom(req) {
+  return req.get('x-admin-token') || req.body?.adminToken || '';
+}
+
+function safeCallError(error) {
+  const code = error?.code;
+  if (error?.status === 401) return 'OpenAI rechazó la credencial configurada.';
+  if (error?.status === 429) return 'OpenAI no tiene cuota disponible o alcanzó su límite.';
+  if (code === 21215 || code === 21219) return 'Twilio no permite usar el número emisor configurado.';
+  if (code === 21211) return 'El número destinatario no es válido para Twilio.';
+  if (code === 21408) return 'Twilio no tiene habilitadas las llamadas hacia Argentina.';
+  return 'El proveedor telefónico rechazó la llamada. Revisá los registros de Twilio.';
+}
+
+function rateLimit(req, to) {
+  const now = Date.now();
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const recent = (attemptsByIp.get(ip) || []).filter((time) => now - time < RATE_WINDOW_MS);
+  if (recent.length >= RATE_MAX_CALLS) return 'Alcanzaste el límite de cinco llamadas cada diez minutos.';
+  if (now - (lastCallByNumber.get(to) || 0) < NUMBER_COOLDOWN_MS) return 'Esperá un minuto antes de volver a llamar al mismo número.';
+  recent.push(now);
+  attemptsByIp.set(ip, recent);
+  lastCallByNumber.set(to, now);
+  return null;
+}
+
+function publicCall(reference, call) {
+  return {
+    reference,
+    status: call.status,
+    createdAt: call.createdAt,
+    updatedAt: call.updatedAt || call.createdAt,
+    hasError: Boolean(call.error),
+    error: call.error || null,
+    conversationTurns: call.transcript?.length || 0,
+  };
 }
 
 app.get('/api/health', (_req, res) => {
@@ -59,9 +104,13 @@ app.post('/api/calls', async (req, res) => {
   if (!dryRun && !validAdminToken(req.body.adminToken)) {
     return res.status(403).json({ error: 'Clave administrativa incorrecta o no configurada.' });
   }
+  if (!dryRun) {
+    const limitError = rateLimit(req, to);
+    if (limitError) return res.status(429).json({ error: limitError });
+  }
 
   const reference = crypto.randomUUID();
-  calls.set(reference, { to, fixedMessage, instructions, createdAt: Date.now(), status: dryRun ? 'simulated' : 'queued' });
+  calls.set(reference, { to, fixedMessage, instructions, createdAt: Date.now(), updatedAt: Date.now(), status: dryRun ? 'simulated' : 'queued', transcript: [] });
   if (dryRun) return res.json({ ok: true, dryRun: true, reference, message: 'Simulación válida; no se realizó ninguna llamada.' });
 
   try {
@@ -80,20 +129,17 @@ app.post('/api/calls', async (req, res) => {
     res.json({ ok: true, dryRun: false, reference, sid: call.sid });
   } catch (error) {
     calls.get(reference).status = 'failed';
-    res.status(500).json({ error: error.message });
+    calls.get(reference).error = safeCallError(error);
+    calls.get(reference).updatedAt = Date.now();
+    res.status(502).json({ error: calls.get(reference).error, reference });
   }
 });
 
 app.get('/api/calls/:reference', (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
   const call = calls.get(req.params.reference);
   if (!call) return res.status(404).json({ error: 'Llamada no encontrada.' });
-  res.json({
-    reference: req.params.reference,
-    status: call.status,
-    createdAt: call.createdAt,
-    hasError: Boolean(call.error),
-    conversationTurns: call.transcript?.length || 0,
-  });
+  res.json(publicCall(req.params.reference, call));
 });
 
 app.post('/twilio/voice', (req, res) => {
@@ -114,7 +160,10 @@ app.post('/twilio/voice', (req, res) => {
 
 app.post('/twilio/status', (req, res) => {
   const call = calls.get(String(req.query.reference || ''));
-  if (call) call.status = req.body.CallStatus || call.status;
+  if (call) {
+    call.status = req.body.CallStatus || call.status;
+    call.updatedAt = Date.now();
+  }
   res.sendStatus(204);
 });
 
@@ -126,6 +175,9 @@ server.on('upgrade', (request, socket, head) => {
 wss.on('connection', (ws) => {
   let call;
   const history = [];
+  let responding = false;
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
 
   ws.on('message', async (raw) => {
     let event;
@@ -134,17 +186,29 @@ wss.on('connection', (ws) => {
       call = calls.get(event.customParameters?.reference);
       if (!call) return ws.close(1008, 'Referencia desconocida');
       call.status = 'in-progress';
+      call.updatedAt = Date.now();
       return;
     }
     if (event.type !== 'prompt' || !event.last || !call) return;
 
     const userText = String(event.voicePrompt || '').trim();
     if (!userText) return;
+    if (/\b(no me llamen|no me interesa|no quiero|terminar|cortá|corta|chau|adiós)\b/i.test(userText)) {
+      ws.send(JSON.stringify({ type: 'text', token: 'Entendido. Gracias por tu tiempo. Hasta luego.', last: true, interruptible: false }));
+      setTimeout(() => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'end', handoffData: JSON.stringify({ reason: 'recipient-ended-call' }) }));
+      }, 2500);
+      call.status = 'completed';
+      call.updatedAt = Date.now();
+      return;
+    }
+    if (responding) return;
+    responding = true;
     history.push({ role: 'user', content: userText });
 
     try {
       requireConfig(['OPENAI_API_KEY']);
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      if (!openai) throw new Error('OPENAI_NOT_CONFIGURED');
       const stream = await openai.responses.create({
         model,
         instructions: call.instructions,
@@ -153,21 +217,46 @@ wss.on('connection', (ws) => {
         max_output_tokens: 250,
       });
       let answer = '';
+      let pendingToken = '';
       for await (const chunk of stream) {
         if (chunk.type === 'response.output_text.delta') {
           answer += chunk.delta;
-          ws.send(JSON.stringify({ type: 'text', token: chunk.delta, last: false, interruptible: true }));
+          if (pendingToken) ws.send(JSON.stringify({ type: 'text', token: pendingToken, last: false, interruptible: true }));
+          pendingToken = chunk.delta;
         }
       }
-      ws.send(JSON.stringify({ type: 'text', token: '', last: true, interruptible: true }));
+      if (pendingToken) ws.send(JSON.stringify({ type: 'text', token: pendingToken, last: true, interruptible: true }));
       history.push({ role: 'assistant', content: answer });
-      call.transcript = [...(call.transcript || []), { user: userText, assistant: answer }];
+      if (history.length > 24) history.splice(0, history.length - 24);
+      call.transcript.push({ user: userText, assistant: answer, at: Date.now() });
+      call.updatedAt = Date.now();
     } catch (error) {
       ws.send(JSON.stringify({ type: 'text', token: 'Disculpá, tuve un problema técnico. La llamada finalizará.', last: true }));
-      call.error = error?.status === 401 ? 'OPENAI_AUTHENTICATION_FAILED' : 'AI_RESPONSE_FAILED';
-      console.error('Error de IA durante llamada:', call.error);
+      call.error = error?.status === 401 ? 'OpenAI rechazó la credencial.' : error?.status === 429 ? 'OpenAI no tiene cuota disponible.' : 'No se pudo generar la respuesta.';
+      call.updatedAt = Date.now();
+      console.error('Error de IA durante llamada:', error?.status || error?.code || 'unknown');
+    } finally {
+      responding = false;
     }
   });
 });
+
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 30000);
+wss.on('close', () => clearInterval(heartbeat));
+
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [reference, call] of calls) if (call.createdAt < cutoff) calls.delete(reference);
+  for (const [ip, times] of attemptsByIp) {
+    const recent = times.filter((time) => time >= cutoff);
+    if (recent.length) attemptsByIp.set(ip, recent); else attemptsByIp.delete(ip);
+  }
+}, 60 * 60 * 1000).unref();
 
 server.listen(port, () => console.log(`Llamador IA disponible en http://localhost:${port}`));

@@ -39,22 +39,76 @@ REGLAS ESTRICTAS:
 - No confirmes una contratación: tu única acción comercial es coordinar una segunda llamada con un asesor.</textarea></label>
       <label class="check"><input type="checkbox" name="dryRun" checked> Modo simulación (no llama ni genera cargos)</label>
       <label>Clave administrativa <input name="adminToken" type="password" autocomplete="off" placeholder="Necesaria solo para llamadas reales"></label>
-      <button type="submit">Preparar llamada <span>→</span></button>
+      <button type="submit"><span class="button-label">Validar simulación</span><span>→</span></button>
       <p class="notice">Llamá únicamente a personas que hayan dado su consentimiento. No uses esta herramienta para spam, engaño ni emergencias.</p>
     </form>
     <output id="result" aria-live="polite"></output>
+    <section id="call-status" class="call-status" hidden aria-live="polite">
+      <p class="eyebrow">ESTADO DE LA LLAMADA</p>
+      <div class="status-grid">
+        <div><small>Estado</small><strong id="status-value">—</strong></div>
+        <div><small>Interacciones</small><strong id="turns-value">0</strong></div>
+      </div>
+      <p id="status-error" class="error-text"></p>
+    </section>
   </main>
   <script>
     const form = document.querySelector('#call-form');
     const result = document.querySelector('#result');
+    const dryRun = form.elements.dryRun;
+    const adminToken = form.elements.adminToken;
+    const button = form.querySelector('button');
+    const buttonLabel = form.querySelector('.button-label');
+    const statusPanel = document.querySelector('#call-status');
+    const statusValue = document.querySelector('#status-value');
+    const turnsValue = document.querySelector('#turns-value');
+    const statusError = document.querySelector('#status-error');
+
+    function updateMode() {
+      adminToken.required = !dryRun.checked;
+      buttonLabel.textContent = dryRun.checked ? 'Validar simulación' : 'Iniciar llamada real';
+    }
+
+    async function pollCall(reference, token) {
+      statusPanel.hidden = false;
+      let attempts = 0;
+      const poll = async () => {
+        attempts += 1;
+        try {
+          const response = await fetch(`/api/calls/${reference}`, { headers: { 'x-admin-token': token } });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || 'No se pudo consultar el estado.');
+          const labels = { queued: 'En cola', initiated: 'Iniciando', ringing: 'Sonando', answered: 'Atendida', 'in-progress': 'Conversando', completed: 'Finalizada', busy: 'Ocupado', 'no-answer': 'Sin respuesta', failed: 'Fallida', canceled: 'Cancelada' };
+          statusValue.textContent = labels[body.status] || body.status;
+          turnsValue.textContent = body.conversationTurns;
+          statusError.textContent = body.error || '';
+          if (!['completed', 'busy', 'no-answer', 'failed', 'canceled'].includes(body.status) && attempts < 120) setTimeout(poll, 2000);
+        } catch (error) {
+          statusError.textContent = error.message;
+        }
+      };
+      poll();
+    }
+
+    dryRun.addEventListener('change', updateMode);
+    updateMode();
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const data = new FormData(form);
-      result.textContent = 'Validando…';
-      const response = await fetch('/api/calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: data.get('to'), fixedMessage: data.get('fixedMessage'), instructions: data.get('instructions'), dryRun: data.get('dryRun') === 'on', adminToken: data.get('adminToken') }) });
-      const body = await response.json();
-      result.textContent = response.ok ? (body.message || `Llamada iniciada. Referencia: ${body.reference}`) : body.error;
-      result.className = response.ok ? 'success' : 'error';
+      button.disabled = true;
+      result.textContent = dryRun.checked ? 'Validando…' : 'Solicitando llamada…';
+      try {
+        const response = await fetch('/api/calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to: data.get('to'), fixedMessage: data.get('fixedMessage'), instructions: data.get('instructions'), dryRun: dryRun.checked, adminToken: data.get('adminToken') }) });
+        const body = await response.json();
+        result.textContent = response.ok ? (body.message || `Llamada iniciada. Referencia: ${body.reference}`) : body.error;
+        result.className = response.ok ? 'success' : 'error';
+        if (response.ok && !body.dryRun) pollCall(body.reference, data.get('adminToken'));
+      } catch {
+        result.textContent = 'No se pudo conectar con el servidor. Esperá unos segundos y reintentá.';
+        result.className = 'error';
+      } finally {
+        button.disabled = false;
+      }
     });
   </script>
 </body>
