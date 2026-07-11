@@ -81,6 +81,7 @@ REGLAS ESTRICTAS:
       </div>
       <div class="crm-toolbar">
         <label>Buscar <input id="contact-search" type="search" placeholder="Nombre, empresa o teléfono"></label>
+        <div class="bulk-actions"><span id="selected-count">0 seleccionados</span><button type="button" id="bulk-call">Llamar</button><button type="button" id="bulk-delete" class="danger">Eliminar</button></div>
         <span id="save-indicator">Sin cambios pendientes</span>
       </div>
       <form id="import-form" class="import-form">
@@ -112,6 +113,7 @@ REGLAS ESTRICTAS:
     const saveIndicator = document.querySelector('#save-indicator');
     let selectedContactId = null;
     let loadedContacts = [];
+    const selectedContacts = new Set();
 
     function updateMode() {
       adminToken.required = !dryRun.checked;
@@ -171,7 +173,7 @@ REGLAS ESTRICTAS:
     function editableCell(contact, field, value, type='text') {
       const input=document.createElement(type === 'select' ? 'select' : 'input');
       if (type === 'select') {
-        const choices = field === 'consentStatus' ? [['unknown','Sin confirmar'],['granted','Autorizado'],['denied','No contactar']] : field === 'status' ? [['pending','Pendiente'],['contacted','Contactado'],['scheduled','Agendado'],['completed','Finalizado'],['do-not-call','No llamar']] : [['LLAMADA_INICIAL','Llamada inicial'],['REINTENTAR','Reintentar'],['SEGUIMIENTO','Seguimiento'],['LLAMAR_DERIVADO','Llamar derivado'],['CONFIRMAR_REUNION','Confirmar reunión'],['REVISION_HUMANA','Revisión humana'],['NO_LLAMAR','No llamar']];
+        const choices = field === 'consentStatus' ? [['unknown','Sin confirmar'],['granted','Autorizado'],['denied','No contactar']] : field === 'status' ? [['pending','Pendiente'],['in-progress','En proceso'],['no-answer','No atendió'],['failed','Error'],['not-interested','No le interesa'],['scheduled','Agendado'],['callback','Volver a llamar']] : [['LLAMADA_INICIAL','Llamada inicial'],['REINTENTAR','Reintentar'],['SEGUIMIENTO','Seguimiento'],['LLAMAR_DERIVADO','Llamar derivado'],['CONFIRMAR_REUNION','Confirmar reunión'],['REVISION_HUMANA','Revisión humana'],['NO_LLAMAR','No llamar']];
         for (const [key,label] of choices) { const option=document.createElement('option'); option.value=key; option.textContent=label; input.append(option); }
       }
       input.value=value || ''; input.dataset.saved=input.value; input.className='grid-input'; input.setAttribute('aria-label',field);
@@ -188,19 +190,21 @@ REGLAS ESTRICTAS:
         const completed=contacts.filter((item) => item.status === 'completed').length;
         document.querySelector('#metric-conversion').textContent = contacts.length ? `${Math.round(completed/contacts.length*100)}%` : '0%';
       }
-      contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><span>Nombre</span><span>Empresa</span><span>Cargo</span><span>Teléfono</span><span>Web</span><span>Instagram</span><span>Facebook</span><span>Consentimiento</span><span>Acción IA</span><span>Estado</span><span>Intentos</span><span>Notas</span><span></span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
+      contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><label class="row-check"><input id="select-all" type="checkbox"><span></span></label><span>Teléfono / WhatsApp</span><span>Estado</span><span>Nombre</span><span>Empresa</span><span>Web</span><span>Acción</span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
         const card = document.createElement('article'); card.className = 'sheet-row';
-        card.append(editableCell(contact,'personName',contact.person_name), editableCell(contact,'companyName',contact.company_name), editableCell(contact,'role',contact.role));
-        const phone=document.createElement('span'); phone.className='fixed-cell'; phone.textContent=contact.phone; card.append(phone);
-        card.append(editableCell(contact,'website',contact.website), editableCell(contact,'instagram',contact.instagram), editableCell(contact,'facebook',contact.facebook), editableCell(contact,'consentStatus',contact.consent_status,'select'), editableCell(contact,'action',contact.action,'select'), editableCell(contact,'status',contact.status,'select'));
-        const attempts=document.createElement('span'); attempts.className='fixed-cell'; attempts.textContent=contact.attempts || 0; card.append(attempts, editableCell(contact,'notes',contact.notes));
+        const checkWrap=document.createElement('label'); checkWrap.className='row-check'; const check=document.createElement('input'); check.type='checkbox'; check.checked=selectedContacts.has(contact.id); check.addEventListener('change',()=>{check.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);updateSelectedCount();}); checkWrap.append(check); card.append(checkWrap);
+        const phone=document.createElement('span'); phone.className='phone-cell'; const phoneText=document.createElement('span'); phoneText.textContent=contact.phone; phone.append(phoneText); if(contact.phone.startsWith('+549')){const wa=document.createElement('a');wa.href=`https://wa.me/${contact.phone.replace(/\D/g,'')}`;wa.target='_blank';wa.rel='noopener';wa.textContent='WhatsApp';phone.append(wa);} card.append(phone);
+        card.append(editableCell(contact,'status',contact.status,'select'),editableCell(contact,'personName',contact.person_name),editableCell(contact,'companyName',contact.company_name),editableCell(contact,'website',contact.website));
         const callButton = document.createElement('button');
-        callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Usar para llamada';
+        callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Llamar';
         callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
         card.append(callButton); contactsList.append(card);
       }
+      document.querySelector('#select-all')?.addEventListener('change',(event)=>{for(const contact of contacts){event.target.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);}renderContacts(contacts,false);updateSelectedCount();});
     }
+
+    function updateSelectedCount(){document.querySelector('#selected-count').textContent=`${selectedContacts.size} seleccionados`;}
 
     async function loadContacts() {
       const token = adminToken.value;
@@ -216,6 +220,28 @@ REGLAS ESTRICTAS:
     searchInput.addEventListener('input', () => {
       const query=searchInput.value.toLowerCase().trim();
       renderContacts(query ? loadedContacts.filter((contact) => [contact.person_name,contact.company_name,contact.phone].some((value)=>String(value||'').toLowerCase().includes(query))) : loadedContacts, false);
+    });
+
+    document.querySelector('#bulk-delete').addEventListener('click',async()=>{
+      const ids=[...selectedContacts]; if(!ids.length)return alert('Seleccioná al menos un contacto.');
+      if(!confirm(`¿Eliminar definitivamente ${ids.length} contacto(s)? Esta acción no se puede deshacer.`))return;
+      const response=await fetch('/api/contacts/delete',{method:'POST',headers:{'content-type':'application/json','x-admin-token':adminToken.value},body:JSON.stringify({ids})}); const body=await response.json();
+      if(!response.ok)return alert(body.error); selectedContacts.clear(); updateSelectedCount(); await loadContacts();
+    });
+
+    document.querySelector('#bulk-call').addEventListener('click',async()=>{
+      const selected=loadedContacts.filter((contact)=>selectedContacts.has(contact.id));
+      if(!selected.length)return alert('Seleccioná al menos un contacto.');
+      if(selected.length>5)return alert('Por seguridad, podés iniciar hasta 5 llamadas por tanda.');
+      if(!adminToken.value)return alert('Ingresá la clave administrativa.');
+      if(!confirm(`Se iniciarán ${selected.length} llamadas reales con cargos. ¿Continuar?`))return;
+      const fixedMessage=form.elements.fixedMessage.value, instructions=form.elements.instructions.value; let started=0;
+      for(const contact of selected){
+        if(contact.status==='not-interested'||contact.consent_status==='denied')continue;
+        const response=await fetch('/api/calls',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to:contact.phone,contactId:contact.id,fixedMessage,instructions,dryRun:false,adminToken:adminToken.value})});
+        if(response.ok)started++; await new Promise((resolve)=>setTimeout(resolve,1500));
+      }
+      alert(`${started} llamada(s) iniciada(s).`); selectedContacts.clear(); updateSelectedCount(); await loadContacts();
     });
 
     const savedToken=sessionStorage.getItem('crmAdminToken');

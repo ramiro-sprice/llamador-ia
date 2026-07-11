@@ -102,6 +102,12 @@ export async function updateContact(id, fields) {
   return rows[0] || null;
 }
 
+export async function deleteContacts(ids) {
+  if (!ids.length) return 0;
+  const { rowCount } = await pool.query('DELETE FROM contacts WHERE id = ANY($1::uuid[])', [ids]);
+  return rowCount;
+}
+
 export async function saveCallStart(reference, contactId, sid, status) {
   if (!pool) return;
   await pool.query(`INSERT INTO call_records (id, reference, contact_id, twilio_sid, status) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (reference) DO NOTHING`, [reference, reference, contactId || null, sid || null, status]);

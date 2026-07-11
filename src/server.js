@@ -8,7 +8,7 @@ import OpenAI from 'openai';
 import twilio from 'twilio';
 import multer from 'multer';
 import { WebSocketServer } from 'ws';
-import { createContact, databaseConfigured, importContacts, initializeDatabase, listContacts, saveCallProgress, saveCallStart, updateContact } from './database.js';
+import { createContact, databaseConfigured, deleteContacts, importContacts, initializeDatabase, listContacts, saveCallProgress, saveCallStart, updateContact } from './database.js';
 import { calendarConfigured, createCalendarEvent, schedulingContext } from './calendar.js';
 import { parseContactFile } from './importer.js';
 
@@ -171,6 +171,15 @@ app.patch('/api/contacts/:id', async (req, res) => {
     if (!contact) return res.status(404).json({ error: 'Contacto no encontrado o sin cambios.' });
     res.json({ contact });
   } catch { res.status(500).json({ error: 'No se pudo actualizar el contacto.' }); }
+});
+
+app.post('/api/contacts/delete', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.filter((id) => /^[0-9a-f-]{36}$/i.test(id)).slice(0, 100) : [];
+  if (!ids.length) return res.status(400).json({ error: 'No seleccionaste contactos válidos.' });
+  try { res.json({ deleted: await deleteContacts(ids) }); }
+  catch { res.status(500).json({ error: 'No se pudieron eliminar los contactos.' }); }
 });
 
 app.post('/api/calls', async (req, res) => {
