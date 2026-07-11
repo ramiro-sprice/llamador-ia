@@ -65,6 +65,11 @@ function safeCallError(error) {
   return 'El proveedor telefónico rechazó la llamada. Revisá los registros de Twilio.';
 }
 
+function greetingSsml(text) {
+  const escaped = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  return `<speak>${escaped.replace(/\[\[\]\]/g, '<break time="1s"/>')}</speak>`;
+}
+
 function rateLimit(req, to) {
   const now = Date.now();
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -309,7 +314,6 @@ app.post('/twilio/voice', (req, res) => {
   const connect = response.connect();
   const relay = connect.conversationRelay({
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
-    welcomeGreeting: call.fixedMessage,
     welcomeGreetingInterruptible: 'none',
     language: 'es-US',
     interruptible: 'speech',
@@ -358,6 +362,7 @@ wss.on('connection', (ws) => {
       if (!call) return ws.close(1008, 'Referencia desconocida');
       call.status = 'in-progress';
       call.updatedAt = Date.now();
+      ws.send(JSON.stringify({ type: 'text', token: greetingSsml(call.fixedMessage), last: true, interruptible: false, preemptible: false }));
       return;
     }
     if (event.type !== 'prompt' || !event.last || !call) return;
