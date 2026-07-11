@@ -7,11 +7,32 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main>
+  <aside class="sidebar">
+    <a class="brand" href="#contacts">Sprice<span>.</span><small>AI Calls</small></a>
+    <nav>
+      <a href="#summary">⌂ <span>Resumen</span></a>
+      <a class="active" href="#contacts">◎ <span>Contactos</span></a>
+      <a href="#call-form">⌕ <span>Llamadas</span></a>
+      <a href="#call-status">□ <span>Agenda</span></a>
+      <a href="#summary">⚙ <span>Configuración</span></a>
+    </nav>
+    <div class="sidebar-foot">Sprice <span>Sistema comercial</span></div>
+  </aside>
+  <main class="workspace">
+    <header class="topbar" id="summary">
+      <div><span class="kicker">CRM INTELIGENTE</span><h2>Contactos</h2></div>
+      <div class="top-actions"><span class="system-pill">● Sistema operativo</span><span class="avatar">RS</span></div>
+    </header>
+    <section class="metrics" aria-label="Resumen del CRM">
+      <article><span>Contactos</span><strong id="metric-total">0</strong></article>
+      <article><span>Pendientes</span><strong id="metric-pending">0</strong></article>
+      <article><span>Agendadas</span><strong id="metric-scheduled">0</strong></article>
+      <article><span>Conversión</span><strong id="metric-conversion">0%</strong></article>
+    </section>
     <p class="eyebrow">ARGENTINA · LLAMADAS CON IA</p>
     <h1>Una llamada clara,<br><em>antes de marcar.</em></h1>
     <p class="intro">Reproduce un aviso fijo y, después, conversa en español rioplatense mediante inteligencia artificial.</p>
-    <form id="call-form">
+    <form id="call-form" class="call-panel">
       <label>Número argentino <input name="to" placeholder="+5491123456789" required></label>
       <label>Mensaje inicial <textarea name="fixedMessage" maxlength="1000" required>Hola, soy el asistente virtual de Sprice. Esta es una llamada automatizada. Ayudamos a empresas, negocios y emprendedores con páginas web, tiendas online y publicidad en Google y redes sociales. ¿Tenés un minuto para que te cuente?</textarea></label>
       <label>Guion de la conversación <textarea name="instructions" maxlength="4000" required>Sos el asistente virtual telefónico de Sprice. Hablá en español rioplatense, con tono profesional, cordial y natural. Usá frases breves y hacé una sola pregunta por turno. Escuchá la respuesta antes de avanzar. No recites todo el guion de una vez.
@@ -53,7 +74,7 @@ REGLAS ESTRICTAS:
       </div>
       <p id="status-error" class="error-text"></p>
     </section>
-    <section class="contacts-section">
+    <section class="contacts-section" id="contacts">
       <div class="section-heading">
         <div><p class="eyebrow">BASE DE CONTACTOS</p><h2>Números para llamar</h2></div>
         <div class="heading-actions"><button type="button" id="test-calendar" class="secondary">Probar calendario</button><button type="button" id="load-contacts" class="secondary">Cargar contactos</button></div>
@@ -159,7 +180,14 @@ REGLAS ESTRICTAS:
     }
 
     function renderContacts(contacts, preserveSource=true) {
-      if (preserveSource) loadedContacts = contacts;
+      if (preserveSource) {
+        loadedContacts = contacts;
+        document.querySelector('#metric-total').textContent = contacts.length;
+        document.querySelector('#metric-pending').textContent = contacts.filter((item) => item.status === 'pending').length;
+        document.querySelector('#metric-scheduled').textContent = contacts.filter((item) => item.status === 'scheduled').length;
+        const completed=contacts.filter((item) => item.status === 'completed').length;
+        document.querySelector('#metric-conversion').textContent = contacts.length ? `${Math.round(completed/contacts.length*100)}%` : '0%';
+      }
       contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><span>Nombre</span><span>Empresa</span><span>Cargo</span><span>Teléfono</span><span>Web</span><span>Instagram</span><span>Facebook</span><span>Consentimiento</span><span>Acción IA</span><span>Estado</span><span>Intentos</span><span>Notas</span><span></span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
         const card = document.createElement('article'); card.className = 'sheet-row';
