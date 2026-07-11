@@ -137,7 +137,10 @@ export async function updateContact(id, fields) {
 
 export async function getContact(id) {
   if (!pool || !id) return null;
-  const { rows } = await pool.query('SELECT * FROM contacts WHERE id=$1', [id]);
+  const { rows } = await pool.query(`SELECT c.*, COALESCE(history.notes_history, '') AS notes_history FROM contacts c LEFT JOIN LATERAL (
+    SELECT string_agg(to_char(r.started_at AT TIME ZONE 'America/Argentina/Buenos_Aires','DD/MM/YYYY HH24:MI') || ' — ' || COALESCE(r.summary,r.status), E'\n' ORDER BY r.started_at DESC) AS notes_history
+    FROM call_records r WHERE r.contact_id=c.id
+  ) history ON TRUE WHERE c.id=$1`, [id]);
   return rows[0] || null;
 }
 

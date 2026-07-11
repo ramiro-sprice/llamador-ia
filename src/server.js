@@ -251,7 +251,7 @@ app.post('/api/calls', async (req, res) => {
 
   if (!argentinaNumber(to)) return res.status(400).json({ error: 'Usá formato internacional argentino: +54 seguido del número.' });
   if (!fixedMessage || fixedMessage.length > 1000) return res.status(400).json({ error: 'El mensaje debe tener entre 1 y 1000 caracteres.' });
-  if (!instructions || instructions.length > 4000) return res.status(400).json({ error: 'Las instrucciones deben tener entre 1 y 4000 caracteres.' });
+  if (!instructions || instructions.length > 8000) return res.status(400).json({ error: 'Las instrucciones deben tener entre 1 y 8000 caracteres.' });
   if (!dryRun && !validAdminToken(req.body.adminToken)) {
     return res.status(403).json({ error: 'Clave administrativa incorrecta o no configurada.' });
   }
@@ -265,7 +265,7 @@ app.post('/api/calls', async (req, res) => {
     try { contact = await getContact(contactId); }
     catch { return res.status(400).json({ error: 'No se pudo cargar la ficha del contacto.' }); }
   }
-  const contactContext = contact ? `\n\nFICHA INTERNA DEL CONTACTO (usala como contexto; no leas esta ficha literalmente):\nNombre: ${contact.person_name || 'No informado'}\nEmpresa: ${contact.company_name || 'No informada'}\nKeywords: ${contact.keywords || 'No informadas'}\nWeb: ${contact.website || 'No informada'}\nNotas anteriores: ${contact.notes || 'Sin notas'}\nIntentos anteriores: ${contact.attempts || 0}.\nSi un dato figura como no informado, no lo inventes ni lo menciones. Usá las keywords de manera natural para comprender la actividad del contacto, nunca las recites como una lista.` : '';
+  const contactContext = contact ? `\n\nFICHA INTERNA DEL CONTACTO (usala como contexto; no leas esta ficha literalmente):\nNombre: ${contact.person_name || 'No informado'}\nEmpresa: ${contact.company_name || 'No informada'}\nKeywords: ${contact.keywords || 'No informadas'}\nWeb: ${contact.website || 'No informada'}\nNota manual: ${contact.notes || 'Sin nota manual'}\nHistorial de llamadas: ${contact.notes_history || 'Sin llamadas anteriores'}\nIntentos anteriores: ${contact.attempts || 0}.\nSi un dato figura como no informado, no lo inventes ni lo menciones. Usá las keywords de manera natural para comprender la actividad del contacto, nunca las recites como una lista.` : '';
   const values = { nombre: contact?.person_name, empresa: contact?.company_name, telefono: to, web: contact?.website, keywords: contact?.keywords };
   const personalizedMessage = fixedMessage.replace(/\{\{(nombre|empresa|telefono|web|keywords)\}\}/gi, (_match, key) => values[key.toLowerCase()] || '').replace(/\s{2,}/g, ' ').trim();
   const reference = crypto.randomUUID();
