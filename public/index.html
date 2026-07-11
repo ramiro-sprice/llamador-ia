@@ -154,7 +154,7 @@ REGLAS ESTRICTAS:
     <section class="contacts-section" id="contacts">
       <div class="section-heading">
         <div><p class="eyebrow">BASE DE CONTACTOS</p><h2>Números para llamar</h2></div>
-        <div class="heading-actions"><button type="button" id="test-calendar" class="secondary">Probar calendario</button><button type="button" id="load-contacts" class="secondary">Cargar contactos</button></div>
+        <div class="heading-actions"><span class="calendar-suspended">Calendario suspendido</span><button type="button" id="load-contacts" class="secondary">Cargar contactos</button></div>
       </div>
       <div class="crm-toolbar">
         <label>Buscar <input id="contact-search" type="search" placeholder="Nombre, empresa o teléfono"></label>
@@ -373,15 +373,6 @@ REGLAS ESTRICTAS:
         importResult.className = body.rejected?.length ? 'error' : 'success';
         importForm.reset(); loadContacts();
       } catch { importResult.textContent = 'No se pudo enviar el archivo. Reintentá cuando el servicio esté activo.'; importResult.className = 'error'; }
-    });
-    document.querySelector('#test-calendar').addEventListener('click', async () => {
-      const token = adminToken.value;
-      if (!token) { contactResult.textContent = 'Ingresá la clave administrativa arriba.'; contactResult.className = 'error'; return; }
-      contactResult.textContent = 'Probando conexión con Google Calendar…';
-      const response = await fetch('/api/calendar/test', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-token': token } });
-      const body = await response.json();
-      contactResult.textContent = response.ok ? body.message : body.error;
-      contactResult.className = response.ok ? 'success' : 'error';
     });
   </script>
 </body>

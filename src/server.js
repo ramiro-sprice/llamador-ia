@@ -9,7 +9,7 @@ import twilio from 'twilio';
 import multer from 'multer';
 import { WebSocketServer } from 'ws';
 import { createContact, databaseConfigured, deleteContacts, getAutomationSettings, getContact, importContacts, initializeDatabase, listContacts, saveAutomationSettings, saveCallProgress, saveCallStart, updateContact } from './database.js';
-import { calendarConfigured, createCalendarEvent, schedulingContext } from './calendar.js';
+import { schedulingContext } from './calendar.js';
 import { parseContactFile } from './importer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -106,12 +106,12 @@ function publicCall(reference, call) {
     hasError: Boolean(call.error),
     error: call.error || null,
     conversationTurns: call.transcript?.length || 0,
-    appointmentCreated: Boolean(call.appointment?.eventId),
+    appointmentCreated: Boolean(call.appointment?.registered),
   };
 }
 
 async function detectConfirmedAppointment(call, history) {
-  if (!openai || call.appointment?.eventId) return null;
+  if (!openai || call.appointment?.registered) return null;
   const conversation = history.map((item) => `${item.role === 'user' ? 'CONTACTO' : 'ASISTENTE'}: ${item.content}`).join('\n');
   if (!/llamad|agenda|horario|mañana|tarde|lunes|martes|miércoles|jueves|viernes/i.test(conversation)) return null;
   const extraction = await openai.responses.create({
@@ -127,21 +127,12 @@ async function detectConfirmedAppointment(call, history) {
 }
 
 async function ensureAppointment(call, history) {
-  if (!call || call.appointment?.eventId) return call?.appointment || null;
+  if (!call || call.appointment?.registered) return call?.appointment || null;
   if (call.appointmentPromise) return call.appointmentPromise;
   call.appointmentPromise = (async () => {
     const appointment = await detectConfirmedAppointment(call, history);
     if (!appointment) return null;
-    const calendar = await createCalendarEvent({
-      ...appointment,
-      phone: call.to,
-      firstCallAt: new Date(call.createdAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-    });
-    if (!calendar.ok) {
-      call.error = `No se pudo crear la cita: ${calendar.error}`;
-      return null;
-    }
-    call.appointment = { ...appointment, eventId: calendar.eventId };
+    call.appointment = { ...appointment, registered: true, calendarSuspended: true };
     if (call.contactId) await updateContact(call.contactId, {
       personName: appointment.personName,
       companyName: appointment.companyName,
@@ -166,7 +157,8 @@ app.get('/api/health', (_req, res) => {
     mode: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'simulation-only',
     adminConfigured: String(process.env.CALL_ADMIN_TOKEN || '').trim().length >= 16,
     databaseConfigured: databaseConfigured(),
-    calendarConfigured: calendarConfigured(),
+    calendarConfigured: false,
+    calendarSuspended: true,
   });
 });
 
@@ -205,17 +197,7 @@ app.put('/api/automation/settings', async (req, res) => {
 
 app.post('/api/calendar/test', async (req, res) => {
   if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
-  if (!calendarConfigured()) return res.status(503).json({ error: 'El calendario no está configurado.' });
-  try {
-    const result = await createCalendarEvent({
-      start: '2020-01-02T10:00:00-03:00',
-      end: '2020-01-02T10:30:00-03:00',
-      personName: 'Prueba de conexión',
-      companyName: 'Sprice',
-    });
-    if (result.error === 'El horario debe ser futuro') return res.json({ ok: true, message: 'Google Calendar está conectado y autenticado.' });
-    res.status(502).json({ error: result.error || 'Apps Script respondió de forma inesperada.' });
-  } catch { res.status(502).json({ error: 'No se pudo conectar con Google Apps Script.' }); }
+  res.status(503).json({ error: 'Google Calendar está suspendido temporalmente.' });
 });
 
 app.post('/api/contacts', async (req, res) => {
@@ -384,7 +366,7 @@ wss.on('connection', (ws) => {
       call.updatedAt = Date.now();
       ws.send(JSON.stringify({ type: 'text', token: greetingSsml(call.fixedMessage), last: true, interruptible: false, preemptible: false }));
       const requestWrapUp = () => {
-        if (!call || call.endScheduled || call.appointment?.eventId || ws.readyState !== 1) return;
+        if (!call || call.endScheduled || call.appointment?.registered || ws.readyState !== 1) return;
         if (responding) { wrapUpTimer = setTimeout(requestWrapUp, 3000); return; }
         const transition = 'Para respetar tu tiempo, creo que lo mejor es que un asesor con más experiencia te vuelva a llamar y lo conversen con tranquilidad. ¿Qué día y horario te resultan más cómodos?';
         call.wrapUpRequested = true;
