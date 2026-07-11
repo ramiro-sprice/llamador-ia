@@ -115,7 +115,7 @@ export async function deleteContacts(ids) {
 export async function saveCallStart(reference, contactId, sid, status) {
   if (!pool) return;
   await pool.query(`INSERT INTO call_records (id, reference, contact_id, twilio_sid, status) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (reference) DO NOTHING`, [reference, reference, contactId || null, sid || null, status]);
-  if (contactId) await pool.query(`UPDATE contacts SET last_called_at=NOW(), status='contacted', updated_at=NOW() WHERE id=$1`, [contactId]);
+  if (contactId) await pool.query(`UPDATE contacts SET last_called_at=NOW(), status='in-progress', attempts=attempts+1, updated_at=NOW() WHERE id=$1`, [contactId]);
 }
 
 export async function saveCallProgress(reference, call) {
@@ -123,6 +123,14 @@ export async function saveCallProgress(reference, call) {
   const transcript = call.transcript || [];
   const summary = call.appointment?.summary || transcript.slice(-3).map((turn) => turn.user).filter(Boolean).join(' ').slice(0, 600) || call.error || null;
   await pool.query(`UPDATE call_records SET status=$1, transcript=$2::jsonb, summary=$3, ended_at=CASE WHEN $1 IN ('completed','failed','busy','no-answer','canceled') THEN COALESCE(ended_at,NOW()) ELSE ended_at END WHERE reference=$4`, [call.status, JSON.stringify(transcript), summary, reference]);
+  if (call.contactId) {
+    const contactStatus = call.appointment?.eventId ? 'scheduled'
+      : call.status === 'no-answer' || call.status === 'busy' || call.status === 'canceled' ? 'no-answer'
+      : call.status === 'failed' ? 'failed'
+      : call.status === 'completed' ? 'in-progress'
+      : null;
+    if (contactStatus) await pool.query(`UPDATE contacts SET status=$1, updated_at=NOW() WHERE id=$2 AND status <> 'scheduled'`, [contactStatus, call.contactId]);
+  }
 }
 
 export async function closeDatabase() {

@@ -106,6 +106,40 @@ async function detectConfirmedAppointment(call, history) {
   } catch { return null; }
 }
 
+async function ensureAppointment(call, history) {
+  if (!call || call.appointment?.eventId) return call?.appointment || null;
+  if (call.appointmentPromise) return call.appointmentPromise;
+  call.appointmentPromise = (async () => {
+    const appointment = await detectConfirmedAppointment(call, history);
+    if (!appointment) return null;
+    const calendar = await createCalendarEvent({
+      ...appointment,
+      phone: call.to,
+      firstCallAt: new Date(call.createdAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+    });
+    if (!calendar.ok) {
+      call.error = `No se pudo crear la cita: ${calendar.error}`;
+      return null;
+    }
+    call.appointment = { ...appointment, eventId: calendar.eventId };
+    if (call.contactId) await updateContact(call.contactId, {
+      personName: appointment.personName,
+      companyName: appointment.companyName,
+      role: appointment.role,
+      website: appointment.website,
+      instagram: appointment.instagram,
+      facebook: appointment.facebook,
+      nextCallAt: appointment.start,
+      preferredPeriod: new Date(appointment.start).getHours() < 12 ? 'mañana' : 'tarde',
+      status: 'scheduled',
+      action: 'SEGUIMIENTO',
+    });
+    await saveCallProgress(call.reference, call);
+    return call.appointment;
+  })().finally(() => { call.appointmentPromise = null; });
+  return call.appointmentPromise;
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
@@ -256,6 +290,16 @@ app.post('/twilio/status', (req, res) => {
     call.status = req.body.CallStatus || call.status;
     call.updatedAt = Date.now();
     saveCallProgress(String(req.query.reference || ''), call).catch(() => {});
+    if (call.status === 'completed') {
+      const finalHistory = (call.transcript || []).flatMap((turn) => [
+        { role: 'user', content: turn.user || '' },
+        { role: 'assistant', content: turn.assistant || '' },
+      ]).filter((item) => item.content);
+      ensureAppointment(call, finalHistory).catch((error) => {
+        call.error = 'No se pudo verificar la segunda llamada al finalizar.';
+        console.error('Error finalizando cita:', error?.message || error);
+      });
+    }
   }
   res.sendStatus(204);
 });
@@ -324,31 +368,9 @@ wss.on('connection', (ws) => {
       call.transcript.push({ user: userText, assistant: answer, at: Date.now() });
       call.updatedAt = Date.now();
       saveCallProgress(call.reference, call).catch(() => {});
-      const appointment = await detectConfirmedAppointment(call, history);
+      const appointment = await ensureAppointment(call, history);
       if (appointment) {
-        const calendar = await createCalendarEvent({
-          ...appointment,
-          phone: call.to,
-          firstCallAt: new Date(call.createdAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-        });
-        if (calendar.ok) {
-          call.appointment = { ...appointment, eventId: calendar.eventId };
-          if (call.contactId) await updateContact(call.contactId, {
-            personName: appointment.personName,
-            companyName: appointment.companyName,
-            role: appointment.role,
-            website: appointment.website,
-            instagram: appointment.instagram,
-            facebook: appointment.facebook,
-            nextCallAt: appointment.start,
-            preferredPeriod: new Date(appointment.start).getHours() < 12 ? 'mañana' : 'tarde',
-            status: 'scheduled',
-          });
           ws.send(JSON.stringify({ type: 'text', token: 'Perfecto. La segunda llamada quedó agendada y confirmada.', last: true, interruptible: true }));
-        } else {
-          call.error = `No se pudo crear la cita: ${calendar.error}`;
-          ws.send(JSON.stringify({ type: 'text', token: 'No pude confirmar el calendario en este momento. Un asesor verificará el horario antes de llamarte.', last: true, interruptible: true }));
-        }
       }
     } catch (error) {
       ws.send(JSON.stringify({ type: 'text', token: 'Disculpá, tuve un problema técnico. La llamada finalizará.', last: true }));
