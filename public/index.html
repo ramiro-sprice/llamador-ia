@@ -327,7 +327,7 @@ REGLAS ESTRICTAS:
       }
       contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><label class="row-check"><input id="select-all" type="checkbox"><span></span></label><span>Teléfono</span><span>Estado</span><span>Nombre</span><span>Empresa</span><span>Keywords</span><span>Web</span><span>Próxima acción</span><span>Nota</span><span>Acción</span><span>Hora</span><span>Duración</span><span>Resultado</span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
-        const card = document.createElement('article'); card.className = `sheet-row${contact.status === 'scheduled' ? ' is-scheduled' : ''}`;
+        const card = document.createElement('article'); card.className = `sheet-row${contact.status === 'in-progress' ? ' is-calling' : contact.status === 'scheduled' ? ' is-scheduled' : ''}`;
         const checkWrap=document.createElement('label'); checkWrap.className='row-check'; const check=document.createElement('input'); check.type='checkbox'; check.checked=selectedContacts.has(contact.id); check.addEventListener('change',()=>{check.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);updateSelectedCount();}); checkWrap.append(check); card.append(checkWrap);
         const phone=document.createElement('span'); phone.className='phone-cell'; const phoneText=document.createElement('span'); phoneText.textContent=contact.phone; phone.append(phoneText); if(contact.phone.startsWith('+549')){const wa=document.createElement('a');wa.href=`https://wa.me/${contact.phone.replace(/\D/g,'')}`;wa.target='_blank';wa.rel='noopener';wa.textContent='WhatsApp';phone.append(wa);} card.append(phone);
         card.append(editableCell(contact,'status',contact.status,'select'),editableCell(contact,'personName',contact.person_name),editableCell(contact,'companyName',contact.company_name),editableCell(contact,'keywords',contact.keywords),editableCell(contact,'website',contact.website),editableCell(contact,'action',contact.action,'select'));
@@ -361,6 +361,12 @@ REGLAS ESTRICTAS:
       sessionStorage.setItem('crmAdminToken', token);
     }
 
+    async function refreshContactsSilently() {
+      if(!adminToken.value || contactsList.contains(document.activeElement) || searchInput.value.trim())return;
+      const response=await fetch('/api/contacts',{headers:{'x-admin-token':adminToken.value}}); if(!response.ok)return;
+      const body=await response.json(); renderContacts(body.contacts);
+    }
+
     searchInput.addEventListener('input', () => {
       const query=searchInput.value.toLowerCase().trim();
       renderContacts(query ? loadedContacts.filter((contact) => [contact.person_name,contact.company_name,contact.phone].some((value)=>String(value||'').toLowerCase().includes(query))) : loadedContacts, false);
@@ -390,7 +396,7 @@ REGLAS ESTRICTAS:
 
     const savedToken=sessionStorage.getItem('crmAdminToken');
     if (savedToken) { adminToken.value=savedToken; loadContacts(); loadAutomation(); loadAutomationStatus(); }
-    setInterval(loadAutomationStatus,5000);
+    setInterval(()=>{loadAutomationStatus();refreshContactsSilently();},5000);
 
     document.querySelector('#load-contacts').addEventListener('click', loadContacts);
     importForm.addEventListener('submit', async (event) => {

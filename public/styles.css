@@ -23,6 +23,7 @@ button{border:0;background:var(--accent);color:white;padding:13px 17px;border-ra
 .row-check{display:grid;place-items:center}.row-check input{width:17px;height:17px;accent-color:var(--accent)}
 .note-cell{white-space:pre-line;max-height:92px;overflow:auto;line-height:1.45;color:var(--muted)}
 .sheet-row.is-scheduled{background:#e8f6eb}.sheet-row.is-scheduled>.grid-input{background:transparent}.sheet-row.is-scheduled:hover{background:#dff1e3}
+.sheet-row.is-calling{animation:calling-row 1.6s ease-in-out infinite}.sheet-row.is-calling>.grid-input{background:transparent}@keyframes calling-row{0%,100%{background:#fff4e6}50%{background:#ffdca8}}@media(prefers-reduced-motion:reduce){.sheet-row.is-calling{animation:none;background:#ffe8c4}}
 .calendar-suspended{align-self:center;padding:9px 12px;border-radius:999px;background:#f3f1ec;color:#766a55;font-size:.75rem;font-weight:700}
 .phone-cell{display:flex!important;gap:8px;align-items:center;flex-wrap:wrap}.phone-cell a{font-size:.7rem;color:#16864b;text-decoration:none}
 .bulk-actions{display:flex;align-items:center;gap:8px}.bulk-actions button{padding:10px 14px}.bulk-actions .danger{background:#fff;color:#c84236;border:1px solid #e2aaa5}
