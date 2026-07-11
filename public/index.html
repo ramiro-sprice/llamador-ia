@@ -142,8 +142,9 @@ REGLAS ESTRICTAS:
       <p id="status-error" class="error-text"></p>
     </section>
     <section class="automation-section" id="automation">
-      <div class="section-heading"><div><p class="eyebrow">AUTOMATIZACIÓN</p><h2>Configuración de llamadas</h2></div><span class="automation-badge">Motor aún inactivo</span></div>
-      <div class="automation-controls"><button type="button" disabled>▶ Iniciar</button><button type="button" class="secondary" disabled>⏸ Pausar</button><button type="button" class="secondary" disabled>■ Detener</button></div>
+      <div class="section-heading"><div><p class="eyebrow">AUTOMATIZACIÓN</p><h2>Configuración de llamadas</h2></div><span class="automation-badge">Motor automático</span></div>
+      <div class="automation-controls"><button type="button" id="automation-start">▶ Iniciar</button><button type="button" id="automation-pause" class="secondary">⏸ Pausar</button><button type="button" id="automation-stop" class="secondary">■ Detener</button></div>
+      <div class="automation-live"><div><small>Estado</small><strong id="automation-state">Pausada</strong></div><div><small>Horario habilitado</small><strong id="automation-window">—</strong></div><div><small>Llamadas activas</small><strong id="automation-active">0</strong></div><div><small>Contactos elegibles</small><strong id="automation-eligible">0</strong></div><div><small>Últimos 10 minutos</small><strong id="automation-last-ten">0</strong></div></div>
       <form id="automation-form" class="automation-form">
         <fieldset><legend>Días habilitados</legend><div class="weekday-list"><label><input type="checkbox" name="weekday" value="1">Lunes</label><label><input type="checkbox" name="weekday" value="2">Martes</label><label><input type="checkbox" name="weekday" value="3">Miércoles</label><label><input type="checkbox" name="weekday" value="4">Jueves</label><label><input type="checkbox" name="weekday" value="5">Viernes</label></div><p class="notice">Sábados, domingos y feriados argentinos se bloquean automáticamente.</p></fieldset>
         <fieldset><legend>Horarios</legend><div class="settings-grid"><label>Mañana desde<input type="time" name="morningStart" required></label><label>Mañana hasta<input type="time" name="morningEnd" required></label><label>Tarde desde<input type="time" name="afternoonStart" required></label><label>Tarde hasta<input type="time" name="afternoonEnd" required></label></div></fieldset>
@@ -190,6 +191,9 @@ REGLAS ESTRICTAS:
     const saveIndicator = document.querySelector('#save-indicator');
     const automationForm = document.querySelector('#automation-form');
     const automationSaveStatus = document.querySelector('#automation-save-status');
+    const automationStart = document.querySelector('#automation-start');
+    const automationPause = document.querySelector('#automation-pause');
+    const automationStop = document.querySelector('#automation-stop');
     let selectedContactId = null;
     let loadedContacts = [];
     const selectedContacts = new Set();
@@ -210,6 +214,37 @@ REGLAS ESTRICTAS:
       const response=await fetch('/api/automation/settings',{headers:{'x-admin-token':adminToken.value}}); const body=await response.json();
       if(response.ok)fillAutomation(body.settings); else automationSaveStatus.textContent=body.error;
     }
+
+    function renderAutomationStatus(body) {
+      const labels={running:'Activa',paused:'Pausada',stopped:'Detenida'};
+      document.querySelector('#automation-state').textContent=labels[body.settings.status]||body.settings.status;
+      document.querySelector('#automation-window').textContent=body.withinSchedule?'Sí':'No';
+      document.querySelector('#automation-active').textContent=body.activeCalls??body.stats.active_contacts??0;
+      document.querySelector('#automation-eligible').textContent=body.stats.eligible??0;
+      document.querySelector('#automation-last-ten').textContent=body.stats.calls_last_ten_minutes??0;
+      automationStart.disabled=body.settings.status==='running'; automationPause.disabled=body.settings.status!=='running'; automationStop.disabled=body.settings.status==='stopped';
+    }
+
+    async function loadAutomationStatus() {
+      if(!adminToken.value)return;
+      const response=await fetch('/api/automation/status',{headers:{'x-admin-token':adminToken.value}}); const body=await response.json();
+      if(response.ok)renderAutomationStatus(body);
+    }
+
+    async function automationCommand(command, payload={}) {
+      const response=await fetch(`/api/automation/${command}`,{method:'POST',headers:{'content-type':'application/json','x-admin-token':adminToken.value},body:JSON.stringify(payload)}); const body=await response.json();
+      if(!response.ok){automationSaveStatus.textContent=body.error;return false;} await loadAutomationStatus(); return true;
+    }
+
+    automationStart.addEventListener('click',async()=>{
+      if(!adminToken.value)return alert('Ingresá la clave administrativa.');
+      const response=await fetch('/api/automation/status',{headers:{'x-admin-token':adminToken.value}}); const body=await response.json(); if(!response.ok)return alert(body.error);
+      const s=body.settings; const days=(s.weekdays||[]).join(', ');
+      if(!confirm(`Contactos elegibles: ${body.stats.eligible}.\nDías configurados: ${days}.\nHorarios: ${String(s.morning_start).slice(0,5)} a ${String(s.morning_end).slice(0,5)} y ${String(s.afternoon_start).slice(0,5)} a ${String(s.afternoon_end).slice(0,5)}.\nLímite: ${s.max_per_ten_minutes} cada 10 minutos, ${s.concurrency} simultánea(s), ${s.daily_max} por día.\n\n¿Confirmar e iniciar?`))return;
+      await automationCommand('start',{fixedMessage:form.elements.fixedMessage.value,instructions:form.elements.instructions.value});
+    });
+    automationPause.addEventListener('click',()=>automationCommand('pause'));
+    automationStop.addEventListener('click',()=>{if(confirm('Se cancelará la cola pendiente. Las llamadas activas terminarán normalmente.'))automationCommand('stop');});
 
     automationForm.addEventListener('submit',async(event)=>{
       event.preventDefault(); if(!adminToken.value){automationSaveStatus.textContent='Ingresá la clave administrativa en la sección de llamadas.';return;}
@@ -354,7 +389,8 @@ REGLAS ESTRICTAS:
     });
 
     const savedToken=sessionStorage.getItem('crmAdminToken');
-    if (savedToken) { adminToken.value=savedToken; loadContacts(); loadAutomation(); }
+    if (savedToken) { adminToken.value=savedToken; loadContacts(); loadAutomation(); loadAutomationStatus(); }
+    setInterval(loadAutomationStatus,5000);
 
     document.querySelector('#load-contacts').addEventListener('click', loadContacts);
     importForm.addEventListener('submit', async (event) => {

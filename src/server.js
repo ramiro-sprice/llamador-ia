@@ -8,8 +8,8 @@ import OpenAI from 'openai';
 import twilio from 'twilio';
 import multer from 'multer';
 import { WebSocketServer } from 'ws';
-import { createContact, databaseConfigured, deleteContacts, getAutomationSettings, getContact, importContacts, initializeDatabase, listContacts, saveAutomationSettings, saveCallProgress, saveCallStart, updateContact } from './database.js';
-import { schedulingContext } from './calendar.js';
+import { automationStats, claimNextAutomationContact, createContact, databaseConfigured, deleteContacts, getAutomationSettings, getContact, importContacts, initializeDatabase, listContacts, recoverInterruptedContacts, releaseAutomationContact, saveAutomationSettings, saveCallProgress, saveCallStart, setAutomationState, updateContact } from './database.js';
+import { automationAllowedNow, schedulingContext } from './calendar.js';
 import { parseContactFile } from './importer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +36,8 @@ const calls = new Map();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
 const attemptsByIp = new Map();
 const lastCallByNumber = new Map();
+let automationTickBusy = false;
+let lastAutomationLaunchAt = 0;
 
 function argentinaNumber(value) {
   return /^\+54\d{10,13}$/.test(String(value || '').replace(/[\s()-]/g, ''));
@@ -95,6 +97,22 @@ function rateLimit(req, to) {
   attemptsByIp.set(ip, recent);
   lastCallByNumber.set(to, now);
   return null;
+}
+
+async function startOutboundCall({ to, contactId, fixedMessage, instructions, automated = false }) {
+  let contact = null;
+  if (contactId && databaseConfigured()) contact = await getContact(contactId);
+  const contactContext = contact ? `\n\nFICHA INTERNA DEL CONTACTO (usala como contexto; no leas esta ficha literalmente):\nNombre: ${contact.person_name || 'No informado'}\nEmpresa: ${contact.company_name || 'No informada'}\nKeywords: ${contact.keywords || 'No informadas'}\nWeb: ${contact.website || 'No informada'}\nNota manual: ${contact.notes || 'Sin nota manual'}\nHistorial de llamadas: ${contact.notes_history || 'Sin llamadas anteriores'}\nIntentos anteriores: ${contact.attempts || 0}.\nSi un dato figura como no informado, no lo inventes ni lo menciones. Usá las keywords de manera natural para comprender la actividad del contacto, nunca las recites como una lista.` : '';
+  const values = { nombre: contact?.person_name, empresa: contact?.company_name, telefono: to, web: contact?.website, keywords: contact?.keywords || 'servicios como los de ustedes' };
+  const personalizedMessage = fixedMessage.replace(/\{\{(nombre|empresa|telefono|web|keywords)\}\}/gi, (_match, key) => values[key.toLowerCase()] || '').trim();
+  const reference = crypto.randomUUID();
+  calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated });
+  requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
+  const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  const outbound = await client.calls.create({ to, from: process.env.TWILIO_PHONE_NUMBER, url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`, statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`, statusCallbackEvent: ['initiated','ringing','answered','completed'], timeout: 30, timeLimit: maxCallSeconds });
+  calls.get(reference).sid = outbound.sid;
+  await saveCallStart(reference, contactId, outbound.sid, 'queued');
+  return { reference, sid: outbound.sid };
 }
 
 function publicCall(reference, call) {
@@ -195,6 +213,36 @@ app.put('/api/automation/settings', async (req, res) => {
   catch { res.status(500).json({ error: 'No se pudo guardar la configuración.' }); }
 });
 
+app.get('/api/automation/status', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  try {
+    const settings = await getAutomationSettings();
+    const stats = await automationStats();
+    res.json({ settings, stats, withinSchedule: automationAllowedNow(settings), activeCalls: [...calls.values()].filter((call) => call.automated && !['completed','failed','busy','no-answer','canceled'].includes(call.status)).length });
+  } catch { res.status(500).json({ error: 'No se pudo consultar la automatización.' }); }
+});
+
+app.post('/api/automation/start', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  const fixedMessage = String(req.body.fixedMessage || '').trim();
+  const instructions = String(req.body.instructions || '').trim();
+  if (!fixedMessage || fixedMessage.length > 1000 || !instructions || instructions.length > 8000) return res.status(400).json({ error: 'El mensaje inicial o el guion no son válidos.' });
+  try { res.json({ settings: await setAutomationState('running', { fixedMessage, instructions }), stats: await automationStats() }); }
+  catch { res.status(500).json({ error: 'No se pudo iniciar la automatización.' }); }
+});
+
+app.post('/api/automation/pause', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  try { res.json({ settings: await setAutomationState('paused') }); }
+  catch { res.status(500).json({ error: 'No se pudo pausar la automatización.' }); }
+});
+
+app.post('/api/automation/stop', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  try { res.json({ settings: await setAutomationState('stopped') }); }
+  catch { res.status(500).json({ error: 'No se pudo detener la automatización.' }); }
+});
+
 app.post('/api/calendar/test', async (req, res) => {
   if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
   res.status(503).json({ error: 'Google Calendar está suspendido temporalmente.' });
@@ -262,38 +310,14 @@ app.post('/api/calls', async (req, res) => {
     if (limitError) return res.status(429).json({ error: limitError });
   }
 
-  let contact = null;
-  if (contactId && databaseConfigured()) {
-    try { contact = await getContact(contactId); }
-    catch { return res.status(400).json({ error: 'No se pudo cargar la ficha del contacto.' }); }
-  }
-  const contactContext = contact ? `\n\nFICHA INTERNA DEL CONTACTO (usala como contexto; no leas esta ficha literalmente):\nNombre: ${contact.person_name || 'No informado'}\nEmpresa: ${contact.company_name || 'No informada'}\nKeywords: ${contact.keywords || 'No informadas'}\nWeb: ${contact.website || 'No informada'}\nNota manual: ${contact.notes || 'Sin nota manual'}\nHistorial de llamadas: ${contact.notes_history || 'Sin llamadas anteriores'}\nIntentos anteriores: ${contact.attempts || 0}.\nSi un dato figura como no informado, no lo inventes ni lo menciones. Usá las keywords de manera natural para comprender la actividad del contacto, nunca las recites como una lista.` : '';
-  const values = { nombre: contact?.person_name, empresa: contact?.company_name, telefono: to, web: contact?.website, keywords: contact?.keywords || 'servicios como los de ustedes' };
-  const personalizedMessage = fixedMessage.replace(/\{\{(nombre|empresa|telefono|web|keywords)\}\}/gi, (_match, key) => values[key.toLowerCase()] || '').trim();
-  const reference = crypto.randomUUID();
-  calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: dryRun ? 'simulated' : 'queued', transcript: [] });
-  if (dryRun) return res.json({ ok: true, dryRun: true, reference, message: 'Simulación válida; no se realizó ninguna llamada.' });
+  if (dryRun) return res.json({ ok: true, dryRun: true, reference: crypto.randomUUID(), message: 'Simulación válida; no se realizó ninguna llamada.' });
 
   try {
-    requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
-    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    const call = await client.calls.create({
-      to,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`,
-      statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`,
-      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-      timeout: 30,
-      timeLimit: maxCallSeconds,
-    });
-    calls.get(reference).sid = call.sid;
-    await saveCallStart(reference, contactId, call.sid, 'queued');
-    res.json({ ok: true, dryRun: false, reference, sid: call.sid });
+    const started = await startOutboundCall({ to, contactId, fixedMessage, instructions });
+    res.json({ ok: true, dryRun: false, ...started });
   } catch (error) {
-    calls.get(reference).status = 'failed';
-    calls.get(reference).error = safeCallError(error);
-    calls.get(reference).updatedAt = Date.now();
-    res.status(502).json({ error: calls.get(reference).error, reference });
+    if (contactId) await releaseAutomationContact(contactId, 'failed').catch(() => {});
+    res.status(502).json({ error: safeCallError(error) });
   }
 });
 
@@ -465,6 +489,30 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000).unref();
 
+async function runAutomationTick() {
+  if (automationTickBusy || !databaseConfigured()) return;
+  automationTickBusy = true;
+  try {
+    const settings = await getAutomationSettings();
+    if (settings.status !== 'running' || !settings.fixed_message || !settings.instructions || !automationAllowedNow(settings)) return;
+    const stats = await automationStats();
+    if (stats.calls_last_ten_minutes >= settings.max_per_ten_minutes || stats.calls_today >= settings.daily_max || stats.active_contacts >= settings.concurrency) return;
+    if (Date.now() - lastAutomationLaunchAt < settings.delay_seconds * 1000) return;
+    const contact = await claimNextAutomationContact(settings.max_attempts);
+    if (!contact) return;
+    lastAutomationLaunchAt = Date.now();
+    try {
+      await startOutboundCall({ to:contact.phone, contactId:contact.id, fixedMessage:settings.fixed_message, instructions:settings.instructions, automated:true });
+    } catch (error) {
+      await releaseAutomationContact(contact.id, 'failed');
+      console.error('Error iniciando llamada automática:', error?.code || error?.message || 'unknown');
+    }
+  } catch (error) { console.error('Error en motor automático:', error?.message || 'unknown'); }
+  finally { automationTickBusy = false; }
+}
+
+setInterval(runAutomationTick, 5000).unref();
+
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError) {
     const message = error.code === 'LIMIT_FILE_SIZE' ? 'El archivo supera el límite de 2 MB.' : 'No se pudo recibir el archivo.';
@@ -475,5 +523,5 @@ app.use((error, _req, res, _next) => {
 });
 
 initializeDatabase()
-  .then(() => server.listen(port, () => console.log(`Llamador IA disponible en http://localhost:${port}`)))
+  .then(async () => { await recoverInterruptedContacts(); server.listen(port, () => console.log(`Llamador IA disponible en http://localhost:${port}`)); })
   .catch((error) => { console.error('No se pudo inicializar PostgreSQL:', error.message); process.exit(1); });

@@ -67,9 +67,19 @@ export async function initializeDatabase() {
       delay_seconds INTEGER NOT NULL DEFAULT 30,
       max_attempts INTEGER NOT NULL DEFAULT 3,
       retry_hours INTEGER NOT NULL DEFAULT 24,
+      fixed_message TEXT,
+      instructions TEXT,
+      started_at TIMESTAMPTZ,
+      paused_at TIMESTAMPTZ,
+      stopped_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     INSERT INTO automation_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+    ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS fixed_message TEXT;
+    ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS instructions TEXT;
+    ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+    ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
+    ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
   `);
 }
 
@@ -81,6 +91,46 @@ export async function getAutomationSettings() {
 export async function saveAutomationSettings(settings) {
   const { rows } = await pool.query(`UPDATE automation_settings SET weekdays=$1::jsonb, morning_start=$2, morning_end=$3, afternoon_start=$4, afternoon_end=$5, max_per_ten_minutes=$6, concurrency=$7, daily_max=$8, delay_seconds=$9, max_attempts=$10, retry_hours=$11, updated_at=NOW() WHERE id=1 RETURNING *`, [JSON.stringify(settings.weekdays), settings.morningStart, settings.morningEnd, settings.afternoonStart, settings.afternoonEnd, settings.maxPerTenMinutes, settings.concurrency, settings.dailyMax, settings.delaySeconds, settings.maxAttempts, settings.retryHours]);
   return rows[0];
+}
+
+export async function setAutomationState(status, templates = {}) {
+  const timestampColumn = status === 'running' ? 'started_at' : status === 'paused' ? 'paused_at' : 'stopped_at';
+  const { rows } = await pool.query(`UPDATE automation_settings SET status=$1, fixed_message=COALESCE($2,fixed_message), instructions=COALESCE($3,instructions), ${timestampColumn}=NOW(), updated_at=NOW() WHERE id=1 RETURNING *`, [status, templates.fixedMessage || null, templates.instructions || null]);
+  return rows[0];
+}
+
+export async function automationStats() {
+  const { rows } = await pool.query(`SELECT
+    COUNT(*) FILTER (WHERE c.status IN ('pending','callback') AND c.consent_status <> 'denied' AND (c.next_call_at IS NULL OR c.next_call_at <= NOW()))::int AS eligible,
+    (SELECT COUNT(*)::int FROM call_records a WHERE a.status IN ('queued','initiated','ringing','answered','in-progress')) AS active_contacts,
+    (SELECT COUNT(*)::int FROM call_records r WHERE r.started_at >= NOW()-INTERVAL '10 minutes') AS calls_last_ten_minutes,
+    (SELECT COUNT(*)::int FROM call_records r WHERE r.started_at >= date_trunc('day',NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires') AT TIME ZONE 'America/Argentina/Buenos_Aires') AS calls_today
+    FROM contacts c`);
+  return rows[0];
+}
+
+export async function claimNextAutomationContact(maxAttempts) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`SELECT * FROM contacts WHERE status IN ('pending','callback') AND consent_status <> 'denied' AND attempts < $1 AND (next_call_at IS NULL OR next_call_at <= NOW()) ORDER BY COALESCE(next_call_at,created_at),created_at FOR UPDATE SKIP LOCKED LIMIT 1`, [maxAttempts]);
+    if (!rows[0]) { await client.query('COMMIT'); return null; }
+    await client.query(`UPDATE contacts SET status='in-progress',updated_at=NOW() WHERE id=$1`, [rows[0].id]);
+    await client.query('COMMIT');
+    return rows[0];
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+export async function releaseAutomationContact(id, status = 'pending') {
+  if (!pool || !id) return;
+  await pool.query(`UPDATE contacts SET status=$1,updated_at=NOW() WHERE id=$2 AND status='in-progress'`, [status, id]);
+}
+
+export async function recoverInterruptedContacts() {
+  if (!pool) return 0;
+  const { rowCount } = await pool.query(`UPDATE contacts SET status='callback',updated_at=NOW() WHERE status='in-progress'`);
+  return rowCount;
 }
 
 export async function listContacts() {

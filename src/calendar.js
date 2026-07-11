@@ -54,3 +54,13 @@ export async function createCalendarEvent(data) {
 export function calendarConfigured() {
   return Boolean(process.env.GOOGLE_CALENDAR_WEBHOOK_URL && process.env.GOOGLE_CALENDAR_WEBHOOK_SECRET);
 }
+
+export function automationAllowedNow(settings, now = new Date()) {
+  const current = argentinaParts(now);
+  const weekdayMap = { Monday:1, Tuesday:2, Wednesday:3, Thursday:4, Friday:5, Saturday:6, Sunday:7 };
+  if (!Array.isArray(settings.weekdays) || !settings.weekdays.map(Number).includes(weekdayMap[current.weekday])) return false;
+  if (!businessDay(current.isoDate)) return false;
+  const minute = current.hour * 60 + Number(new Intl.DateTimeFormat('en-CA', { timeZone:zone, minute:'2-digit' }).format(now));
+  const toMinute = (value) => { const [hour,minutes] = String(value).split(':').map(Number); return hour*60+minutes; };
+  return (minute >= toMinute(settings.morning_start) && minute < toMinute(settings.morning_end)) || (minute >= toMinute(settings.afternoon_start) && minute < toMinute(settings.afternoon_end));
+}
