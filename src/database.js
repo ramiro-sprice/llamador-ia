@@ -167,7 +167,7 @@ export async function saveCallProgress(reference, call) {
       : call.status === 'failed' ? 'failed'
       : call.status === 'completed' ? 'in-progress'
       : null;
-    if (contactStatus) await pool.query(`UPDATE contacts SET status=$1, updated_at=NOW() WHERE id=$2 AND status <> 'scheduled'`, [contactStatus, call.contactId]);
+    if (contactStatus) await pool.query(`UPDATE contacts SET status=$1, updated_at=NOW() WHERE id=$2 AND status NOT IN ('scheduled','not-interested')`, [contactStatus, call.contactId]);
   }
 }
 

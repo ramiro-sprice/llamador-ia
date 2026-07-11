@@ -371,6 +371,8 @@ wss.on('connection', (ws) => {
       }, 2500);
       call.status = 'completed';
       call.updatedAt = Date.now();
+      if (call.contactId && /\b(no me llamen|no me interesa|no quiero)\b/i.test(userText)) updateContact(call.contactId, { status: 'not-interested', action: 'NO_LLAMAR' }).catch(() => {});
+      saveCallProgress(call.reference, call).catch(() => {});
       return;
     }
     if (responding) return;
