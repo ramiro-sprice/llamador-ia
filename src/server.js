@@ -8,7 +8,7 @@ import OpenAI from 'openai';
 import twilio from 'twilio';
 import multer from 'multer';
 import { WebSocketServer } from 'ws';
-import { createContact, databaseConfigured, deleteContacts, importContacts, initializeDatabase, listContacts, saveCallProgress, saveCallStart, updateContact } from './database.js';
+import { createContact, databaseConfigured, deleteContacts, getAutomationSettings, importContacts, initializeDatabase, listContacts, saveAutomationSettings, saveCallProgress, saveCallStart, updateContact } from './database.js';
 import { calendarConfigured, createCalendarEvent, schedulingContext } from './calendar.js';
 import { parseContactFile } from './importer.js';
 
@@ -155,6 +155,32 @@ app.get('/api/contacts', async (req, res) => {
   if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
   try { res.json({ contacts: await listContacts() }); }
   catch { res.status(500).json({ error: 'No se pudieron cargar los contactos.' }); }
+});
+
+app.get('/api/automation/settings', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
+  try { res.json({ settings: await getAutomationSettings() }); }
+  catch { res.status(500).json({ error: 'No se pudo cargar la configuración.' }); }
+});
+
+app.put('/api/automation/settings', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
+  const time = (value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || ''));
+  const number = (value, min, max) => Number.isInteger(Number(value)) && Number(value) >= min && Number(value) <= max;
+  const settings = {
+    weekdays: Array.isArray(req.body.weekdays) ? [...new Set(req.body.weekdays.map(Number))].filter((day) => day >= 1 && day <= 5) : [],
+    morningStart: req.body.morningStart, morningEnd: req.body.morningEnd,
+    afternoonStart: req.body.afternoonStart, afternoonEnd: req.body.afternoonEnd,
+    maxPerTenMinutes: Number(req.body.maxPerTenMinutes), concurrency: Number(req.body.concurrency), dailyMax: Number(req.body.dailyMax),
+    delaySeconds: Number(req.body.delaySeconds), maxAttempts: Number(req.body.maxAttempts), retryHours: Number(req.body.retryHours),
+  };
+  if (!settings.weekdays.length) return res.status(400).json({ error: 'Seleccioná al menos un día hábil.' });
+  if (![settings.morningStart,settings.morningEnd,settings.afternoonStart,settings.afternoonEnd].every(time) || settings.morningStart >= settings.morningEnd || settings.afternoonStart >= settings.afternoonEnd) return res.status(400).json({ error: 'Revisá los horarios configurados.' });
+  if (!number(settings.maxPerTenMinutes,1,50) || !number(settings.concurrency,1,10) || !number(settings.dailyMax,1,1000) || !number(settings.delaySeconds,0,3600) || !number(settings.maxAttempts,1,20) || !number(settings.retryHours,1,720)) return res.status(400).json({ error: 'Uno de los límites está fuera del rango permitido.' });
+  try { res.json({ settings: await saveAutomationSettings(settings) }); }
+  catch { res.status(500).json({ error: 'No se pudo guardar la configuración.' }); }
 });
 
 app.post('/api/calendar/test', async (req, res) => {

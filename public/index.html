@@ -14,7 +14,7 @@
       <a class="active" href="#contacts">◎ <span>Contactos</span></a>
       <a href="#call-form">⌕ <span>Llamadas</span></a>
       <a href="#call-status">□ <span>Agenda</span></a>
-      <a href="#summary">⚙ <span>Configuración</span></a>
+      <a href="#automation">⚙ <span>Automatización</span></a>
     </nav>
     <div class="sidebar-foot">Sprice <span>Sistema comercial</span></div>
   </aside>
@@ -74,6 +74,16 @@ REGLAS ESTRICTAS:
       </div>
       <p id="status-error" class="error-text"></p>
     </section>
+    <section class="automation-section" id="automation">
+      <div class="section-heading"><div><p class="eyebrow">AUTOMATIZACIÓN</p><h2>Configuración de llamadas</h2></div><span class="automation-badge">Motor aún inactivo</span></div>
+      <div class="automation-controls"><button type="button" disabled>▶ Iniciar</button><button type="button" class="secondary" disabled>⏸ Pausar</button><button type="button" class="secondary" disabled>■ Detener</button></div>
+      <form id="automation-form" class="automation-form">
+        <fieldset><legend>Días habilitados</legend><div class="weekday-list"><label><input type="checkbox" name="weekday" value="1">Lunes</label><label><input type="checkbox" name="weekday" value="2">Martes</label><label><input type="checkbox" name="weekday" value="3">Miércoles</label><label><input type="checkbox" name="weekday" value="4">Jueves</label><label><input type="checkbox" name="weekday" value="5">Viernes</label></div><p class="notice">Sábados, domingos y feriados argentinos se bloquean automáticamente.</p></fieldset>
+        <fieldset><legend>Horarios</legend><div class="settings-grid"><label>Mañana desde<input type="time" name="morningStart" required></label><label>Mañana hasta<input type="time" name="morningEnd" required></label><label>Tarde desde<input type="time" name="afternoonStart" required></label><label>Tarde hasta<input type="time" name="afternoonEnd" required></label></div></fieldset>
+        <fieldset><legend>Límites</legend><div class="settings-grid"><label>Máximo cada 10 minutos<input type="number" name="maxPerTenMinutes" min="1" max="50" required></label><label>Llamadas simultáneas<input type="number" name="concurrency" min="1" max="10" required></label><label>Máximo diario<input type="number" name="dailyMax" min="1" max="1000" required></label><label>Segundos entre llamadas<input type="number" name="delaySeconds" min="0" max="3600" required></label><label>Intentos por contacto<input type="number" name="maxAttempts" min="1" max="20" required></label><label>Reintentar después de (horas)<input type="number" name="retryHours" min="1" max="720" required></label></div></fieldset>
+        <div class="automation-save"><button type="submit">Guardar configuración</button><span id="automation-save-status" class="notice">El motor automático no se activará al guardar.</span></div>
+      </form>
+    </section>
     <section class="contacts-section" id="contacts">
       <div class="section-heading">
         <div><p class="eyebrow">BASE DE CONTACTOS</p><h2>Números para llamar</h2></div>
@@ -111,6 +121,8 @@ REGLAS ESTRICTAS:
     const importResult = document.querySelector('#import-result');
     const searchInput = document.querySelector('#contact-search');
     const saveIndicator = document.querySelector('#save-indicator');
+    const automationForm = document.querySelector('#automation-form');
+    const automationSaveStatus = document.querySelector('#automation-save-status');
     let selectedContactId = null;
     let loadedContacts = [];
     const selectedContacts = new Set();
@@ -119,6 +131,27 @@ REGLAS ESTRICTAS:
       adminToken.required = !dryRun.checked;
       buttonLabel.textContent = dryRun.checked ? 'Validar simulación' : 'Iniciar llamada real';
     }
+
+    function fillAutomation(settings) {
+      const weekdays=Array.isArray(settings.weekdays)?settings.weekdays.map(Number):[1,2,3,4,5];
+      automationForm.querySelectorAll('[name="weekday"]').forEach((input)=>{input.checked=weekdays.includes(Number(input.value));});
+      for(const [field,column] of Object.entries({morningStart:'morning_start',morningEnd:'morning_end',afternoonStart:'afternoon_start',afternoonEnd:'afternoon_end',maxPerTenMinutes:'max_per_ten_minutes',concurrency:'concurrency',dailyMax:'daily_max',delaySeconds:'delay_seconds',maxAttempts:'max_attempts',retryHours:'retry_hours'})) automationForm.elements[field].value=String(settings[column]??'').slice(0,5);
+    }
+
+    async function loadAutomation() {
+      if(!adminToken.value)return;
+      const response=await fetch('/api/automation/settings',{headers:{'x-admin-token':adminToken.value}}); const body=await response.json();
+      if(response.ok)fillAutomation(body.settings); else automationSaveStatus.textContent=body.error;
+    }
+
+    automationForm.addEventListener('submit',async(event)=>{
+      event.preventDefault(); if(!adminToken.value){automationSaveStatus.textContent='Ingresá la clave administrativa en la sección de llamadas.';return;}
+      const data=new FormData(automationForm); const payload=Object.fromEntries(data); payload.weekdays=data.getAll('weekday').map(Number);
+      automationSaveStatus.textContent='Guardando…';
+      const response=await fetch('/api/automation/settings',{method:'PUT',headers:{'content-type':'application/json','x-admin-token':adminToken.value},body:JSON.stringify(payload)}); const body=await response.json();
+      automationSaveStatus.textContent=response.ok?'Configuración guardada. El motor continúa inactivo.':body.error;
+      if(response.ok)fillAutomation(body.settings);
+    });
 
     async function pollCall(reference, token) {
       statusPanel.hidden = false;
@@ -254,7 +287,7 @@ REGLAS ESTRICTAS:
     });
 
     const savedToken=sessionStorage.getItem('crmAdminToken');
-    if (savedToken) { adminToken.value=savedToken; loadContacts(); }
+    if (savedToken) { adminToken.value=savedToken; loadContacts(); loadAutomation(); }
 
     document.querySelector('#load-contacts').addEventListener('click', loadContacts);
     importForm.addEventListener('submit', async (event) => {

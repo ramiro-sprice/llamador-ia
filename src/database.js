@@ -51,7 +51,34 @@ export async function initializeDatabase() {
       ended_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS automation_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      status TEXT NOT NULL DEFAULT 'paused',
+      weekdays JSONB NOT NULL DEFAULT '[1,2,3,4,5]'::jsonb,
+      morning_start TIME NOT NULL DEFAULT '09:00',
+      morning_end TIME NOT NULL DEFAULT '13:00',
+      afternoon_start TIME NOT NULL DEFAULT '14:00',
+      afternoon_end TIME NOT NULL DEFAULT '18:00',
+      max_per_ten_minutes INTEGER NOT NULL DEFAULT 5,
+      concurrency INTEGER NOT NULL DEFAULT 1,
+      daily_max INTEGER NOT NULL DEFAULT 50,
+      delay_seconds INTEGER NOT NULL DEFAULT 30,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      retry_hours INTEGER NOT NULL DEFAULT 24,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    INSERT INTO automation_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
   `);
+}
+
+export async function getAutomationSettings() {
+  const { rows } = await pool.query('SELECT * FROM automation_settings WHERE id=1');
+  return rows[0];
+}
+
+export async function saveAutomationSettings(settings) {
+  const { rows } = await pool.query(`UPDATE automation_settings SET weekdays=$1::jsonb, morning_start=$2, morning_end=$3, afternoon_start=$4, afternoon_end=$5, max_per_ten_minutes=$6, concurrency=$7, daily_max=$8, delay_seconds=$9, max_attempts=$10, retry_hours=$11, updated_at=NOW() WHERE id=1 RETURNING *`, [JSON.stringify(settings.weekdays), settings.morningStart, settings.morningEnd, settings.afternoonStart, settings.afternoonEnd, settings.maxPerTenMinutes, settings.concurrency, settings.dailyMax, settings.delaySeconds, settings.maxAttempts, settings.retryHours]);
+  return rows[0];
 }
 
 export async function listContacts() {
