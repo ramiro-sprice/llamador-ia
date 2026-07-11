@@ -315,7 +315,10 @@ app.post('/twilio/voice', (req, res) => {
   const relay = connect.conversationRelay({
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
     welcomeGreetingInterruptible: 'none',
-    language: 'es-US',
+    ttsLanguage: 'es-MX',
+    ttsProvider: 'Amazon',
+    voice: 'Mia-Neural',
+    transcriptionLanguage: 'es-US',
     interruptible: 'speech',
   });
   relay.parameter({ name: 'reference', value: String(req.query.reference) });
