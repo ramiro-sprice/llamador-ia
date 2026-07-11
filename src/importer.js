@@ -3,7 +3,7 @@ import readXlsxFile from 'read-excel-file/node';
 import { parse } from 'csv-parse/sync';
 
 const aliases = {
-  nombre:'personName', persona:'personName', empresa:'companyName', negocio:'companyName', cargo:'role', telefono:'phone', teléfono:'phone', celular:'phone', web:'website', website:'website', instagram:'instagram', facebook:'facebook', notas:'notes', nota:'notes', consentimiento:'consentStatus', accion:'action', acción:'action',
+  nombre:'personName', persona:'personName', empresa:'companyName', negocio:'companyName', keywords:'keywords', palabras_clave:'keywords', 'palabras clave':'keywords', cargo:'role', telefono:'phone', teléfono:'phone', celular:'phone', web:'website', website:'website', instagram:'instagram', facebook:'facebook', notas:'notes', nota:'notes', consentimiento:'consentStatus', accion:'action', acción:'action',
 };
 
 function normalizeHeader(value) {
@@ -27,7 +27,7 @@ function mapRows(rows) {
     if (!phone) { rejected.push({ row: index + 2, error: 'Teléfono argentino inválido. Usá formato +54.' }); return; }
     const consent = normalizeHeader(raw.consentStatus);
     contacts.push({
-      id: crypto.randomUUID(), phone, personName: raw.personName || '', companyName: raw.companyName || '', role: raw.role || '', website: raw.website || '', instagram: raw.instagram || '', facebook: raw.facebook || '', notes: raw.notes || '',
+      id: crypto.randomUUID(), phone, personName: raw.personName || '', companyName: raw.companyName || '', keywords: raw.keywords || '', role: raw.role || '', website: raw.website || '', instagram: raw.instagram || '', facebook: raw.facebook || '', notes: raw.notes || '',
       consentStatus: ['si','sí','autorizado','granted'].includes(consent) ? 'granted' : ['no','denegado','denied'].includes(consent) ? 'denied' : 'unknown',
       action: String(raw.action || 'LLAMADA_INICIAL').toUpperCase().replace(/\s+/g, '_'),
     });
