@@ -70,6 +70,19 @@ function greetingSsml(text) {
   return `<speak>${escaped.replace(/\[\[\]\]/g, '<break time="1s"/>')}</speak>`;
 }
 
+function endAfterSpeech(ws, call, text, reason = 'assistant-ended-call') {
+  if (!call || call.endScheduled) return;
+  call.endScheduled = true;
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
+  const delay = Math.min(12000, Math.max(2500, Math.ceil(words / 2.2 * 1000) + 1200));
+  setTimeout(() => {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'end', handoffData: JSON.stringify({ reason }) }));
+    call.status = 'completed';
+    call.updatedAt = Date.now();
+    saveCallProgress(call.reference, call).catch(() => {});
+  }, delay);
+}
+
 function rateLimit(req, to) {
   const now = Date.now();
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -373,10 +386,9 @@ wss.on('connection', (ws) => {
     const userText = String(event.voicePrompt || '').trim();
     if (!userText) return;
     if (/\b(no me llamen|no me interesa|no quiero|terminar|cortá|corta|chau|adiós)\b/i.test(userText)) {
-      ws.send(JSON.stringify({ type: 'text', token: 'Entendido. Gracias por tu tiempo. Hasta luego.', last: true, interruptible: false }));
-      setTimeout(() => {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'end', handoffData: JSON.stringify({ reason: 'recipient-ended-call' }) }));
-      }, 2500);
+      const farewell = 'Entendido. Gracias por tu tiempo. Hasta luego.';
+      ws.send(JSON.stringify({ type: 'text', token: farewell, last: true, interruptible: false }));
+      endAfterSpeech(ws, call, farewell, 'recipient-ended-call');
       call.status = 'completed';
       call.updatedAt = Date.now();
       if (call.contactId && /\b(no me llamen|no me interesa|no quiero)\b/i.test(userText)) updateContact(call.contactId, { status: 'not-interested', action: 'NO_LLAMAR' }).catch(() => {});
@@ -412,6 +424,7 @@ wss.on('connection', (ws) => {
       call.transcript.push({ user: userText, assistant: answer, at: Date.now() });
       call.updatedAt = Date.now();
       saveCallProgress(call.reference, call).catch(() => {});
+      if (/\b(hasta luego|que tengas (?:un )?buen(?:o)? (?:día|tarde)|chau|adiós|me despido|gracias por tu tiempo)\b/i.test(answer)) endAfterSpeech(ws, call, answer);
       const appointment = await ensureAppointment(call, history);
       if (appointment) {
           ws.send(JSON.stringify({ type: 'text', token: 'Perfecto. La segunda llamada quedó agendada y confirmada.', last: true, interruptible: true }));
