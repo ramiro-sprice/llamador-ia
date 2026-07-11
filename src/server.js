@@ -20,7 +20,9 @@ const wss = new WebSocketServer({ noServer: true });
 const port = Number(process.env.PORT || 3000);
 const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
-const maxCallSeconds = Math.min(Number(process.env.MAX_CALL_SECONDS || 300), 900);
+const maxCallSeconds = 8 * 60;
+const wrapUpAfterSeconds = 6 * 60;
+const finalFarewellAfterSeconds = 7 * 60 + 30;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_MAX_CALLS = 5;
@@ -114,7 +116,7 @@ async function detectConfirmedAppointment(call, history) {
   if (!/llamad|agenda|horario|mañana|tarde|lunes|martes|miércoles|jueves|viernes/i.test(conversation)) return null;
   const extraction = await openai.responses.create({
     model,
-    instructions: `Extraé una cita solamente si el contacto aceptó explícitamente una segunda llamada, quedaron definidos día y franja, y fueron informados el nombre de la persona y el nombre de la empresa o emprendimiento. ${schedulingContext()} Devolvé exclusivamente JSON válido, sin markdown: {"confirmed":boolean,"start":"ISO 8601 con -03:00","end":"ISO 8601 con -03:00","personName":string,"companyName":string,"role":string,"serviceInterest":string,"mainNeed":string,"website":string,"instagram":string,"facebook":string,"summary":string}. Para mañana usá 10:00; para tarde usá 15:00; duración 30 minutos. Si falta nombre, empresa, día, franja o confirmación inequívoca, confirmed debe ser false y start/end vacíos. En website/instagram/facebook copiá únicamente direcciones o usuarios explícitos; nunca escribas “sí”.`,
+    instructions: `Extraé una cita solamente si el contacto aceptó explícitamente que un asesor con más experiencia lo vuelva a llamar, quedaron definidos día y franja, y fueron informados el nombre de la persona y el nombre de la empresa o emprendimiento. ${schedulingContext()} Devolvé exclusivamente JSON válido, sin markdown: {"confirmed":boolean,"start":"ISO 8601 con -03:00","end":"ISO 8601 con -03:00","personName":string,"companyName":string,"role":string,"serviceInterest":string,"mainNeed":string,"website":string,"instagram":string,"facebook":string,"summary":string}. Para mañana usá 10:00; para tarde usá 15:00; duración 30 minutos. Si falta nombre, empresa, día, franja o confirmación inequívoca, confirmed debe ser false y start/end vacíos. En website/instagram/facebook copiá únicamente direcciones o usuarios explícitos; nunca escribas “sí”.`,
     input: conversation,
     max_output_tokens: 500,
   });
@@ -367,6 +369,8 @@ wss.on('connection', (ws) => {
   let call;
   const history = [];
   let responding = false;
+  let wrapUpTimer;
+  let finalFarewellTimer;
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
@@ -379,6 +383,26 @@ wss.on('connection', (ws) => {
       call.status = 'in-progress';
       call.updatedAt = Date.now();
       ws.send(JSON.stringify({ type: 'text', token: greetingSsml(call.fixedMessage), last: true, interruptible: false, preemptible: false }));
+      const requestWrapUp = () => {
+        if (!call || call.endScheduled || call.appointment?.eventId || ws.readyState !== 1) return;
+        if (responding) { wrapUpTimer = setTimeout(requestWrapUp, 3000); return; }
+        const transition = 'Para respetar tu tiempo, creo que lo mejor es que un asesor con más experiencia te vuelva a llamar y lo conversen con tranquilidad. ¿Qué día y horario te resultan más cómodos?';
+        call.wrapUpRequested = true;
+        history.push({ role: 'assistant', content: transition });
+        call.transcript.push({ user: '', assistant: transition, at: Date.now() });
+        call.updatedAt = Date.now();
+        ws.send(JSON.stringify({ type: 'text', token: transition, last: true, interruptible: true, preemptible: false }));
+        saveCallProgress(call.reference, call).catch(() => {});
+      };
+      wrapUpTimer = setTimeout(requestWrapUp, wrapUpAfterSeconds * 1000);
+      const requestFinalFarewell = () => {
+        if (!call || call.endScheduled || ws.readyState !== 1) return;
+        if (responding) { finalFarewellTimer = setTimeout(requestFinalFarewell, 2000); return; }
+        const farewell = 'Muchas gracias por tu tiempo. Para no extenderme más, dejamos la conversación acá y continuamos en la próxima llamada. Que tengas un buen día.';
+        ws.send(JSON.stringify({ type: 'text', token: farewell, last: true, interruptible: false, preemptible: false }));
+        endAfterSpeech(ws, call, farewell, 'maximum-duration-reached');
+      };
+      finalFarewellTimer = setTimeout(requestFinalFarewell, finalFarewellAfterSeconds * 1000);
       return;
     }
     if (event.type !== 'prompt' || !event.last || !call) return;
@@ -404,7 +428,7 @@ wss.on('connection', (ws) => {
       if (!openai) throw new Error('OPENAI_NOT_CONFIGURED');
       const stream = await openai.responses.create({
         model,
-        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLAS OBLIGATORIAS PARA AGENDAR: antes de proponer o confirmar una segunda llamada, obtené el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá el cargo de forma natural; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta nombre, empresa, día y franja. No afirmes que una cita quedó agendada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.`,
+        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLAS OBLIGATORIAS PARA AGENDAR: antes de confirmar que un asesor con más experiencia lo volverá a llamar, obtené el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá el cargo de forma natural; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta nombre, empresa, día y franja. No afirmes que la devolución quedó registrada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.${call.wrapUpRequested ? '\nCIERRE POR TIEMPO: ya transcurrieron seis minutos. No abras temas nuevos. Priorizá acordar la devolución del asesor, confirmar los datos necesarios y despedirte brevemente.' : ''}`,
         input: history,
         stream: true,
         max_output_tokens: 250,
@@ -427,7 +451,7 @@ wss.on('connection', (ws) => {
       if (/\b(hasta luego|que tengas (?:un )?buen(?:o)? (?:día|tarde)|chau|adiós|me despido|gracias por tu tiempo)\b/i.test(answer)) endAfterSpeech(ws, call, answer);
       const appointment = await ensureAppointment(call, history);
       if (appointment) {
-          ws.send(JSON.stringify({ type: 'text', token: 'Perfecto. La segunda llamada quedó agendada y confirmada.', last: true, interruptible: true }));
+          ws.send(JSON.stringify({ type: 'text', token: 'Perfecto. Ya registré el horario para que un asesor con más experiencia te vuelva a llamar.', last: true, interruptible: true }));
       }
     } catch (error) {
       ws.send(JSON.stringify({ type: 'text', token: 'Disculpá, tuve un problema técnico. La llamada finalizará.', last: true }));
@@ -438,6 +462,7 @@ wss.on('connection', (ws) => {
       responding = false;
     }
   });
+  ws.on('close', () => { if (wrapUpTimer) clearTimeout(wrapUpTimer); if (finalFarewellTimer) clearTimeout(finalFarewellTimer); });
 });
 
 const heartbeat = setInterval(() => {

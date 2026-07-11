@@ -54,7 +54,7 @@ Me gustaría compartirte algunas ideas que podrían ayudarlos a aparecer mejor c
 ¿si Tenés un minuto te explico mejor? te prometo que voy a ser breve.</textarea></label>
       <label>Guion de la conversación <textarea name="instructions" maxlength="8000" required>Sos el asistente virtual telefónico de Sprice. Hablá en español rioplatense, con tono profesional, cordial y natural. Usá frases breves y hacé una sola pregunta por turno. Escuchá la respuesta antes de avanzar. No recites todo el guion de una vez.
 
-OBJETIVO: detectar una necesidad real y, solamente si hay interés, coordinar una segunda llamada con un asesor humano de Sprice.
+OBJETIVO: detectar una necesidad real y, solamente si hay interés, explicar que un asesor con más experiencia de Sprice lo volverá a llamar y coordinar el momento de esa devolución.
 
 CÓMO PRESENTAR LAS SOLUCIONES DE SPRICE:
 - No enumeres todos los servicios juntos.
@@ -78,9 +78,9 @@ FLUJO OBLIGATORIO:
 4. Si venden productos, preguntá: “¿Cómo puede ver la gente lo que venden o hacen actualmente?”.
 5. Preguntá cuál de estas propuestas podría interesarle: página web, tienda online, publicidad en Google o publicidad en redes sociales.
 6. Si muestra interés, explicá en una o dos frases cómo podría ayudar Sprice, sin inventar características, precios ni resultados.
-7. Cuando acepte la propuesta de una segunda llamada y elija un horario, preguntá obligatoriamente el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá también su cargo; si no quiere informarlo, continuá.
+7. Cuando acepte que un asesor con más experiencia lo vuelva a llamar y elija un horario, preguntá obligatoriamente el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá también su cargo; si no quiere informarlo, continuá.
 8. Si tiene web, Instagram o Facebook, pedí la dirección o usuario concreto. No registres solamente “sí”. Si prefiere no darlo, continuá.
-9. Solamente si muestra interés, proponé: “Si te parece, podemos coordinar una llamada más tranquila con un asesor para explicarte las mejoras. ¿Te conviene hoy por la tarde o mañana por la mañana?”. Usá únicamente opciones hábiles permitidas por el contexto de agenda. Después de que elija, pedí su nombre y el nombre del estudio o empresa para registrar la llamada. Confirmá en voz alta nombre, empresa, día y franja.
+9. Solamente si muestra interés, decí: “Por lo que me contás, creo que lo mejor es que un asesor con más experiencia te vuelva a llamar para explicarte bien las mejoras. ¿Te conviene hoy por la tarde o mañana por la mañana?”. Usá únicamente opciones hábiles permitidas por el contexto de agenda. Después de que elija, pedí su nombre y el nombre del estudio o empresa para registrar la devolución. Confirmá en voz alta nombre, empresa, día y franja.
 10. Cerrá agradeciendo el tiempo. Si no hay interés, agradecé y finalizá sin presionar.
 
 PAUSAS Y ESCUCHA:
@@ -126,7 +126,7 @@ REGLAS ESTRICTAS:
 - No inventes información sobre Sprice. Si no sabés algo, indicá que un asesor podrá responderlo.
 - No solicites contraseñas, códigos, datos bancarios, tarjetas ni documentación sensible.
 - No discutas, no presiones y respetá inmediatamente cualquier pedido de terminar la llamada.
-- No confirmes una contratación: tu única acción comercial es coordinar una segunda llamada con un asesor.</textarea></label>
+- No confirmes una contratación: tu única acción comercial es coordinar cuándo lo volverá a llamar un asesor con más experiencia.</textarea></label>
       <label class="check"><input type="checkbox" name="dryRun" checked> Modo simulación (no llama ni genera cargos)</label>
       <label>Clave administrativa <input name="adminToken" type="password" autocomplete="off" placeholder="Necesaria solo para llamadas reales"></label>
       <button type="submit"><span class="button-label">Validar simulación</span><span>→</span></button>
@@ -292,7 +292,7 @@ REGLAS ESTRICTAS:
       }
       contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><label class="row-check"><input id="select-all" type="checkbox"><span></span></label><span>Teléfono</span><span>Estado</span><span>Nombre</span><span>Empresa</span><span>Keywords</span><span>Web</span><span>Próxima acción</span><span>Nota</span><span>Acción</span><span>Hora</span><span>Duración</span><span>Resultado</span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
-        const card = document.createElement('article'); card.className = 'sheet-row';
+        const card = document.createElement('article'); card.className = `sheet-row${contact.status === 'scheduled' ? ' is-scheduled' : ''}`;
         const checkWrap=document.createElement('label'); checkWrap.className='row-check'; const check=document.createElement('input'); check.type='checkbox'; check.checked=selectedContacts.has(contact.id); check.addEventListener('change',()=>{check.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);updateSelectedCount();}); checkWrap.append(check); card.append(checkWrap);
         const phone=document.createElement('span'); phone.className='phone-cell'; const phoneText=document.createElement('span'); phoneText.textContent=contact.phone; phone.append(phoneText); if(contact.phone.startsWith('+549')){const wa=document.createElement('a');wa.href=`https://wa.me/${contact.phone.replace(/\D/g,'')}`;wa.target='_blank';wa.rel='noopener';wa.textContent='WhatsApp';phone.append(wa);} card.append(phone);
         card.append(editableCell(contact,'status',contact.status,'select'),editableCell(contact,'personName',contact.person_name),editableCell(contact,'companyName',contact.company_name),editableCell(contact,'keywords',contact.keywords),editableCell(contact,'website',contact.website),editableCell(contact,'action',contact.action,'select'));
