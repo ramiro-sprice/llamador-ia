@@ -190,16 +190,25 @@ REGLAS ESTRICTAS:
         const completed=contacts.filter((item) => item.status === 'completed').length;
         document.querySelector('#metric-conversion').textContent = contacts.length ? `${Math.round(completed/contacts.length*100)}%` : '0%';
       }
-      contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><label class="row-check"><input id="select-all" type="checkbox"><span></span></label><span>Teléfono / WhatsApp</span><span>Estado</span><span>Nombre</span><span>Empresa</span><span>Web</span><span>Acción</span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
+      contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><label class="row-check"><input id="select-all" type="checkbox"><span></span></label><span>Teléfono</span><span>Estado</span><span>Nombre</span><span>Empresa</span><span>Web</span><span>Próxima acción</span><span>Nota</span><span>Acción</span><span>Hora</span><span>Duración</span><span>Resultado</span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
         const card = document.createElement('article'); card.className = 'sheet-row';
         const checkWrap=document.createElement('label'); checkWrap.className='row-check'; const check=document.createElement('input'); check.type='checkbox'; check.checked=selectedContacts.has(contact.id); check.addEventListener('change',()=>{check.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);updateSelectedCount();}); checkWrap.append(check); card.append(checkWrap);
         const phone=document.createElement('span'); phone.className='phone-cell'; const phoneText=document.createElement('span'); phoneText.textContent=contact.phone; phone.append(phoneText); if(contact.phone.startsWith('+549')){const wa=document.createElement('a');wa.href=`https://wa.me/${contact.phone.replace(/\D/g,'')}`;wa.target='_blank';wa.rel='noopener';wa.textContent='WhatsApp';phone.append(wa);} card.append(phone);
-        card.append(editableCell(contact,'status',contact.status,'select'),editableCell(contact,'personName',contact.person_name),editableCell(contact,'companyName',contact.company_name),editableCell(contact,'website',contact.website));
+        card.append(editableCell(contact,'status',contact.status,'select'),editableCell(contact,'personName',contact.person_name),editableCell(contact,'companyName',contact.company_name),editableCell(contact,'website',contact.website),editableCell(contact,'action',contact.action,'select'));
+        const history=Array.isArray(contact.call_history)?contact.call_history:[];
+        const note=document.createElement('span'); note.className='note-cell';
+        note.textContent=history.length ? history.map((item)=>{const when=new Date(item.startedAt).toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',dateStyle:'short',timeStyle:'short'});const seconds=item.endedAt?Math.max(0,Math.round((new Date(item.endedAt)-new Date(item.startedAt))/1000)):null;return `${when}${seconds===null?'':` · ${seconds}s`} — ${item.summary||item.status||'Sin resumen'}`;}).join('\n') : (contact.notes||'Sin llamadas registradas');
+        note.title=note.textContent; card.append(note);
         const callButton = document.createElement('button');
         callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Llamar';
         callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
-        card.append(callButton); contactsList.append(card);
+        card.append(callButton);
+        const started=contact.last_call_started_at?new Date(contact.last_call_started_at):null;
+        const hour=document.createElement('span'); hour.className='fixed-cell'; hour.textContent=started?started.toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',dateStyle:'short',timeStyle:'short'}):'—';
+        const duration=document.createElement('span'); duration.className='fixed-cell'; duration.textContent=started&&contact.last_call_ended_at?`${Math.max(0,Math.round((new Date(contact.last_call_ended_at)-started)/1000))}s`:'—';
+        const outcome=document.createElement('span'); outcome.className='fixed-cell'; outcome.textContent=contact.last_call_status||'—';
+        card.append(hour,duration,outcome); contactsList.append(card);
       }
       document.querySelector('#select-all')?.addEventListener('change',(event)=>{for(const contact of contacts){event.target.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);}renderContacts(contacts,false);updateSelectedCount();});
     }

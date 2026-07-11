@@ -55,7 +55,11 @@ export async function initializeDatabase() {
 }
 
 export async function listContacts() {
-  const { rows } = await pool.query(`SELECT * FROM contacts ORDER BY COALESCE(next_call_at, created_at) ASC LIMIT 500`);
+  const { rows } = await pool.query(`SELECT c.*, latest.started_at AS last_call_started_at, latest.ended_at AS last_call_ended_at, latest.status AS last_call_status, latest.summary AS last_call_summary, COALESCE(history.call_history, '[]'::json) AS call_history
+    FROM contacts c
+    LEFT JOIN LATERAL (SELECT started_at, ended_at, status, summary FROM call_records WHERE contact_id=c.id ORDER BY started_at DESC LIMIT 1) latest ON TRUE
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('startedAt',r.started_at,'endedAt',r.ended_at,'status',r.status,'summary',r.summary,'transcript',r.transcript) ORDER BY r.started_at DESC) AS call_history FROM call_records r WHERE r.contact_id=c.id) history ON TRUE
+    ORDER BY COALESCE(c.next_call_at, c.created_at) ASC LIMIT 500`);
   return rows;
 }
 
@@ -116,7 +120,9 @@ export async function saveCallStart(reference, contactId, sid, status) {
 
 export async function saveCallProgress(reference, call) {
   if (!pool) return;
-  await pool.query(`UPDATE call_records SET status=$1, transcript=$2::jsonb, ended_at=CASE WHEN $1 IN ('completed','failed','busy','no-answer','canceled') THEN NOW() ELSE ended_at END WHERE reference=$3`, [call.status, JSON.stringify(call.transcript || []), reference]);
+  const transcript = call.transcript || [];
+  const summary = call.appointment?.summary || transcript.slice(-3).map((turn) => turn.user).filter(Boolean).join(' ').slice(0, 600) || call.error || null;
+  await pool.query(`UPDATE call_records SET status=$1, transcript=$2::jsonb, summary=$3, ended_at=CASE WHEN $1 IN ('completed','failed','busy','no-answer','canceled') THEN COALESCE(ended_at,NOW()) ELSE ended_at END WHERE reference=$4`, [call.status, JSON.stringify(transcript), summary, reference]);
 }
 
 export async function closeDatabase() {
