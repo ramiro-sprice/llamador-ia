@@ -198,7 +198,7 @@ app.put('/api/automation/settings', async (req, res) => {
   const time = (value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || ''));
   const number = (value, min, max) => Number.isInteger(Number(value)) && Number(value) >= min && Number(value) <= max;
   const settings = {
-    weekdays: Array.isArray(req.body.weekdays) ? [...new Set(req.body.weekdays.map(Number))].filter((day) => day >= 1 && day <= 5) : [],
+    weekdays: Array.isArray(req.body.weekdays) ? [...new Set(req.body.weekdays.map(Number))].filter((day) => day >= 1 && day <= 7) : [],
     morningStart: req.body.morningStart, morningEnd: req.body.morningEnd,
     afternoonStart: req.body.afternoonStart, afternoonEnd: req.body.afternoonEnd,
     maxPerTenMinutes: Number(req.body.maxPerTenMinutes), concurrency: Number(req.body.concurrency), dailyMax: Number(req.body.dailyMax),
