@@ -67,6 +67,7 @@ export async function initializeDatabase() {
       delay_seconds INTEGER NOT NULL DEFAULT 30,
       max_attempts INTEGER NOT NULL DEFAULT 3,
       retry_hours INTEGER NOT NULL DEFAULT 24,
+      max_call_minutes INTEGER NOT NULL DEFAULT 8,
       fixed_message TEXT,
       instructions TEXT,
       started_at TIMESTAMPTZ,
@@ -80,6 +81,7 @@ export async function initializeDatabase() {
     ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
     ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ;
     ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
+    ALTER TABLE automation_settings ADD COLUMN IF NOT EXISTS max_call_minutes INTEGER NOT NULL DEFAULT 8;
   `);
 }
 
@@ -89,7 +91,7 @@ export async function getAutomationSettings() {
 }
 
 export async function saveAutomationSettings(settings) {
-  const { rows } = await pool.query(`UPDATE automation_settings SET weekdays=$1::jsonb, morning_start=$2, morning_end=$3, afternoon_start=$4, afternoon_end=$5, max_per_ten_minutes=$6, concurrency=$7, daily_max=$8, delay_seconds=$9, max_attempts=$10, retry_hours=$11, updated_at=NOW() WHERE id=1 RETURNING *`, [JSON.stringify(settings.weekdays), settings.morningStart, settings.morningEnd, settings.afternoonStart, settings.afternoonEnd, settings.maxPerTenMinutes, settings.concurrency, settings.dailyMax, settings.delaySeconds, settings.maxAttempts, settings.retryHours]);
+  const { rows } = await pool.query(`UPDATE automation_settings SET weekdays=$1::jsonb, morning_start=$2, morning_end=$3, afternoon_start=$4, afternoon_end=$5, max_per_ten_minutes=$6, concurrency=$7, daily_max=$8, delay_seconds=$9, max_attempts=$10, retry_hours=$11, max_call_minutes=$12, updated_at=NOW() WHERE id=1 RETURNING *`, [JSON.stringify(settings.weekdays), settings.morningStart, settings.morningEnd, settings.afternoonStart, settings.afternoonEnd, settings.maxPerTenMinutes, settings.concurrency, settings.dailyMax, settings.delaySeconds, settings.maxAttempts, settings.retryHours, settings.maxCallMinutes]);
   return rows[0];
 }
 

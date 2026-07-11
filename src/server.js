@@ -20,9 +20,7 @@ const wss = new WebSocketServer({ noServer: true });
 const port = Number(process.env.PORT || 3000);
 const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
-const maxCallSeconds = 8 * 60;
-const wrapUpAfterSeconds = 6 * 60;
-const finalFarewellAfterSeconds = 7 * 60 + 30;
+const defaultMaxCallSeconds = 8 * 60;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_MAX_CALLS = 5;
@@ -99,14 +97,14 @@ function rateLimit(req, to) {
   return null;
 }
 
-async function startOutboundCall({ to, contactId, fixedMessage, instructions, automated = false }) {
+async function startOutboundCall({ to, contactId, fixedMessage, instructions, automated = false, maxCallSeconds = defaultMaxCallSeconds }) {
   let contact = null;
   if (contactId && databaseConfigured()) contact = await getContact(contactId);
   const contactContext = contact ? `\n\nFICHA INTERNA DEL CONTACTO (usala como contexto; no leas esta ficha literalmente):\nNombre: ${contact.person_name || 'No informado'}\nEmpresa: ${contact.company_name || 'No informada'}\nKeywords: ${contact.keywords || 'No informadas'}\nWeb: ${contact.website || 'No informada'}\nNota manual: ${contact.notes || 'Sin nota manual'}\nHistorial de llamadas: ${contact.notes_history || 'Sin llamadas anteriores'}\nIntentos anteriores: ${contact.attempts || 0}.\nSi un dato figura como no informado, no lo inventes ni lo menciones. Usá las keywords de manera natural para comprender la actividad del contacto, nunca las recites como una lista.` : '';
   const values = { nombre: contact?.person_name, empresa: contact?.company_name, telefono: to, web: contact?.website, keywords: contact?.keywords || 'servicios como los de ustedes' };
   const personalizedMessage = fixedMessage.replace(/\{\{(nombre|empresa|telefono|web|keywords)\}\}/gi, (_match, key) => values[key.toLowerCase()] || '').trim();
   const reference = crypto.randomUUID();
-  calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated });
+  calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated, maxCallSeconds });
   requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
   const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
   const outbound = await client.calls.create({ to, from: process.env.TWILIO_PHONE_NUMBER, url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`, statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`, statusCallbackEvent: ['initiated','ringing','answered','completed'], timeout: 30, timeLimit: maxCallSeconds });
@@ -204,11 +202,11 @@ app.put('/api/automation/settings', async (req, res) => {
     morningStart: req.body.morningStart, morningEnd: req.body.morningEnd,
     afternoonStart: req.body.afternoonStart, afternoonEnd: req.body.afternoonEnd,
     maxPerTenMinutes: Number(req.body.maxPerTenMinutes), concurrency: Number(req.body.concurrency), dailyMax: Number(req.body.dailyMax),
-    delaySeconds: Number(req.body.delaySeconds), maxAttempts: Number(req.body.maxAttempts), retryHours: Number(req.body.retryHours),
+    delaySeconds: Number(req.body.delaySeconds), maxAttempts: Number(req.body.maxAttempts), retryHours: Number(req.body.retryHours), maxCallMinutes: Number(req.body.maxCallMinutes),
   };
   if (!settings.weekdays.length) return res.status(400).json({ error: 'Seleccioná al menos un día hábil.' });
   if (![settings.morningStart,settings.morningEnd,settings.afternoonStart,settings.afternoonEnd].every(time) || settings.morningStart >= settings.morningEnd || settings.afternoonStart >= settings.afternoonEnd) return res.status(400).json({ error: 'Revisá los horarios configurados.' });
-  if (!number(settings.maxPerTenMinutes,1,50) || !number(settings.concurrency,1,10) || !number(settings.dailyMax,1,1000) || !number(settings.delaySeconds,0,3600) || !number(settings.maxAttempts,1,20) || !number(settings.retryHours,1,720)) return res.status(400).json({ error: 'Uno de los límites está fuera del rango permitido.' });
+  if (!number(settings.maxPerTenMinutes,1,50) || !number(settings.concurrency,1,10) || !number(settings.dailyMax,1,1000) || !number(settings.delaySeconds,0,3600) || !number(settings.maxAttempts,1,20) || !number(settings.retryHours,1,720) || !number(settings.maxCallMinutes,3,30)) return res.status(400).json({ error: 'Uno de los límites está fuera del rango permitido.' });
   try { res.json({ settings: await saveAutomationSettings(settings) }); }
   catch { res.status(500).json({ error: 'No se pudo guardar la configuración.' }); }
 });
@@ -400,7 +398,8 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'text', token: transition, last: true, interruptible: true, preemptible: false }));
         saveCallProgress(call.reference, call).catch(() => {});
       };
-      wrapUpTimer = setTimeout(requestWrapUp, wrapUpAfterSeconds * 1000);
+      const configuredMaximum = call.maxCallSeconds || defaultMaxCallSeconds;
+      wrapUpTimer = setTimeout(requestWrapUp, Math.max(60, configuredMaximum - 120) * 1000);
       const requestFinalFarewell = () => {
         if (!call || call.endScheduled || ws.readyState !== 1) return;
         if (responding) { finalFarewellTimer = setTimeout(requestFinalFarewell, 2000); return; }
@@ -408,7 +407,7 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'text', token: farewell, last: true, interruptible: false, preemptible: false }));
         endAfterSpeech(ws, call, farewell, 'maximum-duration-reached');
       };
-      finalFarewellTimer = setTimeout(requestFinalFarewell, finalFarewellAfterSeconds * 1000);
+      finalFarewellTimer = setTimeout(requestFinalFarewell, Math.max(90, configuredMaximum - 30) * 1000);
       return;
     }
     if (event.type !== 'prompt' || !event.last || !call) return;
@@ -434,7 +433,7 @@ wss.on('connection', (ws) => {
       if (!openai) throw new Error('OPENAI_NOT_CONFIGURED');
       const stream = await openai.responses.create({
         model,
-        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLAS OBLIGATORIAS PARA AGENDAR: antes de confirmar que un asesor con más experiencia lo volverá a llamar, obtené el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá el cargo de forma natural; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta nombre, empresa, día y franja. No afirmes que la devolución quedó registrada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.${call.wrapUpRequested ? '\nCIERRE POR TIEMPO: ya transcurrieron seis minutos. No abras temas nuevos. Priorizá acordar la devolución del asesor, confirmar los datos necesarios y despedirte brevemente.' : ''}`,
+        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLAS OBLIGATORIAS PARA AGENDAR: antes de confirmar que un asesor con más experiencia lo volverá a llamar, obtené el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá el cargo de forma natural; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta nombre, empresa, día y franja. No afirmes que la devolución quedó registrada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.${call.wrapUpRequested ? '\nCIERRE POR TIEMPO: quedan aproximadamente dos minutos antes del máximo configurado. No abras temas nuevos. Priorizá acordar la devolución del asesor, confirmar los datos necesarios y despedirte brevemente.' : ''}`,
         input: history,
         stream: true,
         max_output_tokens: 250,
@@ -502,7 +501,7 @@ async function runAutomationTick() {
     if (!contact) return;
     lastAutomationLaunchAt = Date.now();
     try {
-      await startOutboundCall({ to:contact.phone, contactId:contact.id, fixedMessage:settings.fixed_message, instructions:settings.instructions, automated:true });
+      await startOutboundCall({ to:contact.phone, contactId:contact.id, fixedMessage:settings.fixed_message, instructions:settings.instructions, automated:true, maxCallSeconds:settings.max_call_minutes*60 });
     } catch (error) {
       await releaseAutomationContact(contact.id, 'failed');
       console.error('Error iniciando llamada automática:', error?.code || error?.message || 'unknown');
