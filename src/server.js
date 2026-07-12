@@ -22,6 +22,7 @@ const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const defaultMaxCallSeconds = 8 * 60;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const elevenLabsVoiceId = String(process.env.ELEVENLABS_VOICE_ID || '').trim();
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_MAX_CALLS = 5;
 const NUMBER_COOLDOWN_MS = 60 * 1000;
@@ -67,7 +68,8 @@ function safeCallError(error) {
   return 'El proveedor telefónico rechazó la llamada. Revisá los registros de Twilio.';
 }
 
-function greetingSsml(text) {
+function greetingForVoice(text) {
+  if (elevenLabsVoiceId) return String(text || '').replace(/\[\[\]\]/g, '…\n\n');
   const escaped = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
   return `<speak>${escaped.replace(/\[\[\]\]/g, '<break time="1s"/>')}</speak>`;
 }
@@ -334,9 +336,10 @@ app.post('/twilio/voice', (req, res) => {
   const relay = connect.conversationRelay({
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
     welcomeGreetingInterruptible: 'none',
-    ttsLanguage: 'es-MX',
-    ttsProvider: 'Amazon',
-    voice: 'Mia-Neural',
+    ttsLanguage: elevenLabsVoiceId ? 'es-US' : 'es-MX',
+    ttsProvider: elevenLabsVoiceId ? 'ElevenLabs' : 'Amazon',
+    voice: elevenLabsVoiceId || 'Mia-Neural',
+    ...(elevenLabsVoiceId ? { elevenlabsTextNormalization: 'on' } : {}),
     transcriptionLanguage: 'es-US',
     interruptible: 'speech',
   });
@@ -386,7 +389,7 @@ wss.on('connection', (ws) => {
       if (!call) return ws.close(1008, 'Referencia desconocida');
       call.status = 'in-progress';
       call.updatedAt = Date.now();
-      ws.send(JSON.stringify({ type: 'text', token: greetingSsml(call.fixedMessage), last: true, interruptible: false, preemptible: false }));
+      ws.send(JSON.stringify({ type: 'text', token: greetingForVoice(call.fixedMessage), last: true, interruptible: false, preemptible: false }));
       const requestWrapUp = () => {
         if (!call || call.endScheduled || call.appointment?.registered || ws.readyState !== 1) return;
         if (responding) { wrapUpTimer = setTimeout(requestWrapUp, 3000); return; }
