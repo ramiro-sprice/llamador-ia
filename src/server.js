@@ -23,6 +23,9 @@ const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const defaultMaxCallSeconds = 8 * 60;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const elevenLabsVoiceId = String(process.env.ELEVENLABS_VOICE_ID || '').trim();
+const twilioAccountSid = String(process.env.TWILIO_ACCOUNT_SID || '').trim();
+const twilioAuthToken = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
+const twilioPhoneNumber = String(process.env.TWILIO_PHONE_NUMBER || '').trim();
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_MAX_CALLS = 5;
 const NUMBER_COOLDOWN_MS = 60 * 1000;
@@ -60,6 +63,9 @@ function adminTokenFrom(req) {
 
 function safeCallError(error) {
   const code = error?.code;
+  if (code === 'TWILIO_ACCOUNT_SID_FORMAT') return 'TWILIO_ACCOUNT_SID tiene un formato incorrecto: debe comenzar con AC.';
+  if (code === 'TWILIO_AUTH_TOKEN_FORMAT') return 'TWILIO_AUTH_TOKEN está vacío o incompleto.';
+  if (code === 20003 || /authentication error|invalid username|authenticate/i.test(String(error?.message || ''))) return 'Twilio rechazó las credenciales. Verificá que TWILIO_ACCOUNT_SID y TWILIO_AUTH_TOKEN pertenezcan a la misma cuenta activa.';
   if (error?.status === 401) return 'OpenAI rechazó la credencial configurada.';
   if (error?.status === 429) return 'OpenAI no tiene cuota disponible o alcanzó su límite.';
   if (code === 21215 || code === 21219) return 'Twilio no permite usar el número emisor configurado.';
@@ -108,8 +114,10 @@ async function startOutboundCall({ to, contactId, fixedMessage, instructions, au
   const reference = crypto.randomUUID();
   calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated, maxCallSeconds });
   requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
-  const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-  const outbound = await client.calls.create({ to, from: process.env.TWILIO_PHONE_NUMBER, url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`, statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`, statusCallbackEvent: ['initiated','ringing','answered','completed'], timeout: 30, timeLimit: maxCallSeconds });
+  if (!/^AC[0-9a-f]{32}$/i.test(twilioAccountSid)) throw Object.assign(new Error('TWILIO_ACCOUNT_SID_FORMAT'), { code:'TWILIO_ACCOUNT_SID_FORMAT' });
+  if (twilioAuthToken.length < 20) throw Object.assign(new Error('TWILIO_AUTH_TOKEN_FORMAT'), { code:'TWILIO_AUTH_TOKEN_FORMAT' });
+  const client = twilio(twilioAccountSid, twilioAuthToken);
+  const outbound = await client.calls.create({ to, from: twilioPhoneNumber, url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`, statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`, statusCallbackEvent: ['initiated','ringing','answered','completed'], timeout: 30, timeLimit: maxCallSeconds });
   calls.get(reference).sid = outbound.sid;
   await saveCallStart(reference, contactId, outbound.sid, 'queued');
   return { reference, sid: outbound.sid };
@@ -172,7 +180,10 @@ async function ensureAppointment(call, history) {
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    mode: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'simulation-only',
+    mode: twilioAccountSid ? 'configured' : 'simulation-only',
+    twilioAccountSidFormat: /^AC[0-9a-f]{32}$/i.test(twilioAccountSid),
+    twilioAuthTokenPresent: twilioAuthToken.length >= 20,
+    twilioPhoneFormat: /^\+\d{10,15}$/.test(twilioPhoneNumber),
     adminConfigured: String(process.env.CALL_ADMIN_TOKEN || '').trim().length >= 16,
     databaseConfigured: databaseConfigured(),
     calendarConfigured: false,
