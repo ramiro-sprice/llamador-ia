@@ -226,7 +226,7 @@ app.post('/api/automation/start', async (req, res) => {
   if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
   const fixedMessage = String(req.body.fixedMessage || '').trim();
   const instructions = String(req.body.instructions || '').trim();
-  if (!fixedMessage || fixedMessage.length > 1000 || !instructions || instructions.length > 8000) return res.status(400).json({ error: 'El mensaje inicial o el guion no son válidos.' });
+  if (!fixedMessage || fixedMessage.length > 1000 || !instructions || instructions.length > 12000) return res.status(400).json({ error: 'El mensaje inicial o el guion no son válidos.' });
   try { res.json({ settings: await setAutomationState('running', { fixedMessage, instructions }), stats: await automationStats() }); }
   catch { res.status(500).json({ error: 'No se pudo iniciar la automatización.' }); }
 });
@@ -301,7 +301,7 @@ app.post('/api/calls', async (req, res) => {
 
   if (!argentinaNumber(to)) return res.status(400).json({ error: 'Usá formato internacional argentino: +54 seguido del número.' });
   if (!fixedMessage || fixedMessage.length > 1000) return res.status(400).json({ error: 'El mensaje debe tener entre 1 y 1000 caracteres.' });
-  if (!instructions || instructions.length > 8000) return res.status(400).json({ error: 'Las instrucciones deben tener entre 1 y 8000 caracteres.' });
+  if (!instructions || instructions.length > 12000) return res.status(400).json({ error: 'Las instrucciones deben tener entre 1 y 12000 caracteres.' });
   if (!dryRun && !validAdminToken(req.body.adminToken)) {
     return res.status(403).json({ error: 'Clave administrativa incorrecta o no configurada.' });
   }
