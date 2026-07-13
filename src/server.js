@@ -120,7 +120,7 @@ async function startOutboundCall({ to, contactId, fixedMessage, instructions, au
   const values = { nombre: contact?.person_name, empresa: contact?.company_name, telefono: to, web: contact?.website, keywords: contact?.keywords || 'servicios como los de ustedes' };
   const personalizedMessage = fixedMessage.replace(/\{\{(nombre|empresa|telefono|web|keywords)\}\}/gi, (_match, key) => values[key.toLowerCase()] || '').trim();
   const reference = crypto.randomUUID();
-  calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated, maxCallSeconds });
+  calls.set(reference, { reference, to, contactId, contactName: contact?.person_name || '', fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated, maxCallSeconds });
   requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
   if (!/^AC[0-9a-f]{32}$/i.test(twilioAccountSid)) throw Object.assign(new Error('TWILIO_ACCOUNT_SID_FORMAT'), { code:'TWILIO_ACCOUNT_SID_FORMAT' });
   const useApiKey = /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid) && twilioApiKeySecret.length >= 20;
@@ -382,7 +382,7 @@ app.post('/twilio/voice', (req, res) => {
     voice: twilioElevenLabsVoiceId || 'Mia-Neural',
     ...(twilioElevenLabsVoiceId ? { elevenlabsTextNormalization: 'on' } : {}),
     transcriptionLanguage: 'es-US',
-    speechTimeout: 3000,
+    speechTimeout: 600,
     interruptible: 'speech',
   });
   relay.parameter({ name: 'reference', value: String(req.query.reference) });
@@ -438,6 +438,27 @@ wss.on('connection', (ws) => {
   let responding = false;
   let wrapUpTimer;
   let finalFarewellTimer;
+  let silenceTimer;
+  const clearSilenceTimer = () => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = null;
+  };
+  const scheduleSilenceCheck = (spokenText) => {
+    clearSilenceTimer();
+    const words = String(spokenText || '').replace(/<[^>]+>|\[\[\]\]/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+    const estimatedSpeechMs = Math.max(1200, Math.ceil(words / 2.4 * 1000));
+    silenceTimer = setTimeout(() => {
+      if (!call || call.endScheduled || responding || ws.readyState !== 1) return;
+      const check = call.contactName
+        ? `${call.contactName}, ¿estás ahí?`
+        : 'Perdoná, no te escuché. ¿Estás ahí?';
+      ws.send(JSON.stringify({ type: 'text', token: speechToken(check), last: true, interruptible: true, preemptible: false }));
+      call.transcript.push({ user: '', assistant: check, at: Date.now() });
+      call.updatedAt = Date.now();
+      saveCallProgress(call.reference, call).catch(() => {});
+      silenceTimer = null;
+    }, estimatedSpeechMs + 2000);
+  };
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
@@ -450,6 +471,7 @@ wss.on('connection', (ws) => {
       call.status = 'in-progress';
       call.updatedAt = Date.now();
       history.push({ role: 'assistant', content: call.fixedMessage });
+      scheduleSilenceCheck(call.fixedMessage);
       const requestWrapUp = () => {
         if (!call || call.endScheduled || call.appointment?.registered || ws.readyState !== 1) return;
         if (responding) { wrapUpTimer = setTimeout(requestWrapUp, 3000); return; }
@@ -459,6 +481,7 @@ wss.on('connection', (ws) => {
         call.transcript.push({ user: '', assistant: transition, at: Date.now() });
         call.updatedAt = Date.now();
         ws.send(JSON.stringify({ type: 'text', token: speechToken(transition), last: true, interruptible: true, preemptible: false }));
+        scheduleSilenceCheck(transition);
         saveCallProgress(call.reference, call).catch(() => {});
       };
       const configuredMaximum = call.maxCallSeconds || defaultMaxCallSeconds;
@@ -473,6 +496,7 @@ wss.on('connection', (ws) => {
       finalFarewellTimer = setTimeout(requestFinalFarewell, Math.max(90, configuredMaximum - 30) * 1000);
       return;
     }
+    clearSilenceTimer();
     if (event.type !== 'prompt' || !event.last || !call) return;
 
     const userText = String(event.voicePrompt || '').trim();
@@ -496,6 +520,7 @@ wss.on('connection', (ws) => {
       call.transcript.push({ user: userText, assistant: transition, at: Date.now() });
       call.updatedAt = Date.now();
       ws.send(JSON.stringify({ type: 'text', token: speechToken(transition), last: true, interruptible: true }));
+      scheduleSilenceCheck(transition);
       saveCallProgress(call.reference, call).catch(() => {});
       return;
     }
@@ -523,6 +548,7 @@ wss.on('connection', (ws) => {
         }
       }
       if (pendingToken) ws.send(JSON.stringify({ type: 'text', token: speechToken(pendingToken), last: true, interruptible: true }));
+      if (answer) scheduleSilenceCheck(answer);
       history.push({ role: 'assistant', content: answer });
       if (history.length > 24) history.splice(0, history.length - 24);
       call.transcript.push({ user: userText, assistant: answer, at: Date.now() });
@@ -531,7 +557,9 @@ wss.on('connection', (ws) => {
       if (/\b(hasta luego|que tengas (?:un )?buen(?:o)? (?:día|tarde)|chau|adiós|me despido|gracias por tu tiempo)\b/i.test(answer)) endAfterSpeech(ws, call, answer);
       const appointment = await ensureAppointment(call, history);
       if (appointment) {
-          ws.send(JSON.stringify({ type: 'text', token: speechToken('Perfecto. Ya registré el horario para que un asesor con más experiencia te vuelva a llamar.'), last: true, interruptible: true }));
+          const confirmation = 'Perfecto. Ya registré el horario para que un asesor con más experiencia te vuelva a llamar.';
+          ws.send(JSON.stringify({ type: 'text', token: speechToken(confirmation), last: true, interruptible: true }));
+          scheduleSilenceCheck(confirmation);
       }
     } catch (error) {
       ws.send(JSON.stringify({ type: 'text', token: speechToken('Disculpá, tuve un problema técnico. La llamada finalizará.'), last: true }));
@@ -542,7 +570,7 @@ wss.on('connection', (ws) => {
       responding = false;
     }
   });
-  ws.on('close', () => { if (wrapUpTimer) clearTimeout(wrapUpTimer); if (finalFarewellTimer) clearTimeout(finalFarewellTimer); });
+  ws.on('close', () => { clearSilenceTimer(); if (wrapUpTimer) clearTimeout(wrapUpTimer); if (finalFarewellTimer) clearTimeout(finalFarewellTimer); });
 });
 
 const heartbeat = setInterval(() => {
