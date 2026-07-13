@@ -326,7 +326,11 @@ app.post('/api/automation/start', async (req, res) => {
   const fixedMessage = String(req.body.fixedMessage || '').trim();
   const instructions = String(req.body.instructions || '').trim();
   if (!fixedMessage || fixedMessage.length > 1000 || !instructions || instructions.length > 12000) return res.status(400).json({ error: 'El mensaje inicial o el guion no son válidos.' });
-  try { res.json({ settings: await setAutomationState('running', { fixedMessage, instructions }), stats: await automationStats() }); }
+  try {
+    const settings = await setAutomationState('running', { fixedMessage, instructions });
+    res.json({ settings, stats: await automationStats() });
+    setImmediate(() => runAutomationTick());
+  }
   catch { res.status(500).json({ error: 'No se pudo iniciar la automatización.' }); }
 });
 

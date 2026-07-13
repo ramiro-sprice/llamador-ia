@@ -337,10 +337,9 @@ REGLAS ESTRICTAS:
 
     automationStart.addEventListener('click',async()=>{
       if(!adminToken.value)return alert('Ingresá la clave administrativa.');
-      const response=await fetch('/api/automation/status',{headers:{'x-admin-token':adminToken.value}}); const body=await response.json(); if(!response.ok)return alert(body.error);
-      const s=body.settings; const days=(s.weekdays||[]).join(', ');
-      if(!confirm(`Contactos elegibles: ${body.stats.eligible}.\nDías configurados: ${days}.\nHorarios: ${String(s.morning_start).slice(0,5)} a ${String(s.morning_end).slice(0,5)} y ${String(s.afternoon_start).slice(0,5)} a ${String(s.afternoon_end).slice(0,5)}.\nLímite: ${s.max_per_ten_minutes} cada 10 minutos, ${s.concurrency} simultánea(s), ${s.daily_max} por día y ${s.max_call_minutes} minutos por llamada.\n\n¿Confirmar e iniciar?`))return;
-      await automationCommand('start',{fixedMessage:form.elements.fixedMessage.value,instructions:form.elements.instructions.value});
+      automationStart.disabled=true; automationSaveStatus.textContent='Iniciando motor automático…';
+      const started=await automationCommand('start',{fixedMessage:form.elements.fixedMessage.value,instructions:form.elements.instructions.value});
+      if(!started)automationStart.disabled=false;
     });
     automationPause.addEventListener('click',()=>automationCommand('pause'));
     automationStop.addEventListener('click',()=>{if(confirm('Se cancelará la cola pendiente. Las llamadas activas terminarán normalmente.'))automationCommand('stop');});
