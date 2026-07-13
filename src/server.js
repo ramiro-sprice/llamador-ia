@@ -456,7 +456,17 @@ wss.on('connection', (ws) => {
       call.transcript.push({ user: '', assistant: check, at: Date.now() });
       call.updatedAt = Date.now();
       saveCallProgress(call.reference, call).catch(() => {});
-      silenceTimer = null;
+      silenceTimer = setTimeout(() => {
+        if (!call || call.endScheduled || responding || ws.readyState !== 1) return;
+        const farewell = 'Parece que no me escuchás. Gracias por tu tiempo. Hasta luego.';
+        ws.send(JSON.stringify({ type: 'text', token: speechToken(farewell), last: true, interruptible: false, preemptible: false }));
+        call.transcript.push({ user: '', assistant: farewell, at: Date.now() });
+        call.status = 'completed';
+        call.updatedAt = Date.now();
+        saveCallProgress(call.reference, call).catch(() => {});
+        endAfterSpeech(ws, call, farewell, 'recipient-silent');
+        silenceTimer = null;
+      }, 4000);
     }, estimatedSpeechMs + 2000);
   };
   ws.isAlive = true;
