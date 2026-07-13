@@ -46,6 +46,7 @@ const attemptsByIp = new Map();
 const lastCallByNumber = new Map();
 let automationTickBusy = false;
 let lastAutomationLaunchAt = 0;
+let lastAutomationEvent = { type:'idle', message:'El motor todavía no realizó intentos en este inicio.', at:null, phone:null };
 
 function twilioClient() {
   const useApiKey = /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid) && twilioApiKeySecret.length >= 20;
@@ -317,7 +318,7 @@ app.get('/api/automation/status', async (req, res) => {
       else if (stats.calls_today >= settings.daily_max) blockedReason = 'Se alcanzó el máximo diario configurado.';
       else if (Date.now() - lastAutomationLaunchAt < settings.delay_seconds * 1000) blockedReason = 'Esperando el intervalo configurado entre llamadas.';
     }
-    res.json({ settings, stats, withinSchedule, blockedReason, activeCalls: [...calls.values()].filter((call) => call.automated && !['completed','failed','busy','no-answer','canceled'].includes(call.status)).length });
+    res.json({ settings, stats, withinSchedule, blockedReason, lastAutomationEvent, activeCalls: [...calls.values()].filter((call) => call.automated && !['completed','failed','busy','no-answer','canceled'].includes(call.status)).length });
   } catch { res.status(500).json({ error: 'No se pudo consultar la automatización.' }); }
 });
 
@@ -721,15 +722,24 @@ async function runAutomationTick() {
     if (stats.calls_last_ten_minutes >= settings.max_per_ten_minutes || stats.calls_today >= settings.daily_max || stats.active_contacts >= settings.concurrency) return;
     if (Date.now() - lastAutomationLaunchAt < settings.delay_seconds * 1000) return;
     const contact = await claimNextAutomationContact(settings.max_attempts);
-    if (!contact) return;
+    if (!contact) {
+      lastAutomationEvent = { type:'waiting', message:'No se encontró un contacto pendiente elegible.', at:Date.now(), phone:null };
+      return;
+    }
     lastAutomationLaunchAt = Date.now();
+    lastAutomationEvent = { type:'starting', message:'Enviando la llamada a Twilio…', at:Date.now(), phone:contact.phone };
     try {
-      await startOutboundCall({ to:contact.phone, contactId:contact.id, fixedMessage:settings.fixed_message, instructions:settings.instructions, automated:true, maxCallSeconds:settings.max_call_minutes*60 });
+      const started = await startOutboundCall({ to:contact.phone, contactId:contact.id, fixedMessage:settings.fixed_message, instructions:settings.instructions, automated:true, maxCallSeconds:settings.max_call_minutes*60 });
+      lastAutomationEvent = { type:'started', message:`Llamada entregada a Twilio. Referencia ${started.reference}.`, at:Date.now(), phone:contact.phone };
     } catch (error) {
       await releaseAutomationContact(contact.id, 'failed');
+      lastAutomationEvent = { type:'error', message:safeCallError(error), detail:String(error?.message || error?.code || 'Error desconocido').slice(0,300), at:Date.now(), phone:contact.phone };
       console.error('Error iniciando llamada automática:', error?.code || error?.message || 'unknown');
     }
-  } catch (error) { console.error('Error en motor automático:', error?.message || 'unknown'); }
+  } catch (error) {
+    lastAutomationEvent = { type:'error', message:'El motor automático tuvo un error interno.', detail:String(error?.message || 'Error desconocido').slice(0,300), at:Date.now(), phone:null };
+    console.error('Error en motor automático:', error?.message || 'unknown');
+  }
   finally { automationTickBusy = false; }
 }
 

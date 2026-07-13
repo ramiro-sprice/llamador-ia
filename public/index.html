@@ -321,7 +321,13 @@ REGLAS ESTRICTAS:
       document.querySelector('#automation-eligible').textContent=body.stats.eligible??0;
       document.querySelector('#automation-last-ten').textContent=body.stats.calls_last_ten_minutes??0;
       automationStart.disabled=body.settings.status==='running'; automationPause.disabled=body.settings.status!=='running'; automationStop.disabled=body.settings.status==='stopped';
-      if(body.settings.status==='running')automationSaveStatus.textContent=body.blockedReason||'Motor activo: buscando el próximo contacto para llamar.';
+      if(body.settings.status==='running'){
+        const event=body.lastAutomationEvent; const when=event?.at?new Date(event.at).toLocaleTimeString('es-AR',{timeZone:'America/Argentina/Buenos_Aires'}):'';
+        automationSaveStatus.textContent=event?.type==='error'
+          ? `ERROR ${when}: ${event.phone||''} — ${event.message}${event.detail?` (${event.detail})`:''}`
+          : body.blockedReason || (event?.at ? `${when}: ${event.phone||''} — ${event.message}` : 'Motor activo: buscando el próximo contacto para llamar.');
+        automationSaveStatus.className=event?.type==='error'?'error-text':'notice';
+      }
     }
 
     async function loadAutomationStatus() {
