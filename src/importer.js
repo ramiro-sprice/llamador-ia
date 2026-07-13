@@ -35,8 +35,14 @@ function mapRows(rows) {
   return { contacts, rejected };
 }
 
+function extractRows(workbook) {
+  if (!Array.isArray(workbook)) return [];
+  if (workbook.length === 1 && Array.isArray(workbook[0]?.data)) return workbook[0].data;
+  return workbook;
+}
+
 export async function parseContactFile(file) {
   if (/\.csv$/i.test(file.originalname)) return mapRows(parse(file.buffer, { bom: true, skip_empty_lines: true, relax_column_count: true }));
-  if (/\.xlsx$/i.test(file.originalname)) return mapRows(await readXlsxFile(file.buffer));
+  if (/\.xlsx$/i.test(file.originalname)) return mapRows(extractRows(await readXlsxFile(file.buffer)));
   throw new Error('Formato no permitido. Usá .xlsx o .csv.');
 }
