@@ -163,13 +163,13 @@ async function detectConfirmedAppointment(call, history) {
   if (!/llamad|agenda|horario|mañana|tarde|lunes|martes|miércoles|jueves|viernes/i.test(conversation)) return null;
   const extraction = await openai.responses.create({
     model,
-    instructions: `Extraé un seguimiento solamente si el contacto aceptó explícitamente que un asesor lo vuelva a llamar y quedaron definidos día y franja. ${schedulingContext()} Devolvé exclusivamente JSON válido, sin markdown: {"confirmed":boolean,"start":"ISO 8601 con -03:00","end":"ISO 8601 con -03:00","personName":string,"companyName":string,"role":string,"serviceInterest":string,"mainNeed":string,"website":string,"instagram":string,"facebook":string,"summary":string,"noTimeCallback":boolean}. Para mañana usá 10:00; para tarde usá 15:00; duración 30 minutos. El nombre de la persona siempre es obligatorio. La empresa es obligatoria salvo que no haya podido hablar por falta de tiempo y haya aceptado expresamente otra llamada; en ese caso noTimeCallback debe ser true y companyName puede quedar vacío. Si falta nombre, día, franja o confirmación inequívoca, confirmed debe ser false y start/end vacíos. Si noTimeCallback es true, summary debe comenzar con “Volver a llamar” e incluir fecha, franja y nombre. En website/instagram/facebook copiá únicamente direcciones o usuarios explícitos; nunca escribas “sí”.`,
+    instructions: `Extraé un seguimiento solamente si aceptaron explícitamente otra llamada y quedaron definidos día y franja. También puede aceptarlo quien atendió cuando informa que la persona responsable no está y dice cuándo encontrarla. ${schedulingContext()} Devolvé exclusivamente JSON válido, sin markdown: {"confirmed":boolean,"start":"ISO 8601 con -03:00","end":"ISO 8601 con -03:00","personName":string,"companyName":string,"role":string,"serviceInterest":string,"mainNeed":string,"website":string,"instagram":string,"facebook":string,"summary":string,"noTimeCallback":boolean,"decisionMakerAbsent":boolean,"gatekeeperName":string,"samePhone":boolean,"alternatePhone":string}. Para mañana usá 10:00; para tarde usá 15:00; duración 30 minutos. personName debe ser la persona a quien se llamará después. Si la persona responsable no estaba, decisionMakerAbsent debe ser true, gatekeeperName debe contener quién atendió si lo dijo, samePhone debe indicar si se la encuentra en el número actual y alternatePhone debe contener el otro número solamente si fue informado. El nombre de la persona a llamar siempre es obligatorio. La empresa es obligatoria salvo falta de tiempo o responsable ausente. Si falta nombre, día, franja o aceptación inequívoca, confirmed debe ser false. El summary debe comenzar con “Volver a llamar” e incluir fecha, franja, responsable y quién atendió cuando se conozca. En website/instagram/facebook copiá únicamente direcciones o usuarios explícitos; nunca escribas “sí”.`,
     input: conversation,
     max_output_tokens: 500,
   });
   try {
     const parsed = JSON.parse(extraction.output_text.replace(/^```json\s*|\s*```$/g, '').trim());
-    return parsed.confirmed && parsed.start && parsed.end && parsed.personName && (parsed.companyName || parsed.noTimeCallback) ? parsed : null;
+    return parsed.confirmed && parsed.start && parsed.end && parsed.personName && (parsed.companyName || parsed.noTimeCallback || parsed.decisionMakerAbsent) ? parsed : null;
   } catch { return null; }
 }
 
@@ -180,18 +180,43 @@ async function ensureAppointment(call, history) {
     const appointment = await detectConfirmedAppointment(call, history);
     if (!appointment) return null;
     call.appointment = { ...appointment, registered: true, calendarSuspended: true };
-    if (call.contactId) await updateContact(call.contactId, {
-      personName: appointment.personName,
-      ...(appointment.companyName ? { companyName: appointment.companyName } : {}),
-      role: appointment.role,
-      website: appointment.website,
-      instagram: appointment.instagram,
-      facebook: appointment.facebook,
-      nextCallAt: appointment.start,
-      preferredPeriod: new Date(appointment.start).getHours() < 12 ? 'mañana' : 'tarde',
-      status: 'scheduled',
-      action: 'SEGUIMIENTO',
-    });
+    const preferredPeriod = new Date(appointment.start).getHours() < 12 ? 'mañana' : 'tarde';
+    const alternatePhone = String(appointment.alternatePhone || '').replace(/[\s()-]/g, '');
+    const useAlternatePhone = appointment.decisionMakerAbsent && !appointment.samePhone && argentinaNumber(alternatePhone) && alternatePhone !== call.to;
+    if (useAlternatePhone) {
+      const newId = crypto.randomUUID();
+      try {
+        await createContact({
+          id: newId,
+          phone: alternatePhone,
+          personName: appointment.personName,
+          companyName: appointment.companyName,
+          role: appointment.role,
+          notes: appointment.summary,
+          source: 'referido-en-llamada',
+          referredBy: appointment.gatekeeperName || call.to,
+          consentStatus: 'unknown',
+          status: 'callback',
+        });
+        await updateContact(newId, { nextCallAt: appointment.start, preferredPeriod, status: 'callback', action: 'SEGUIMIENTO' });
+      } catch (error) {
+        console.error('No se pudo crear el contacto referido:', error?.message || error);
+      }
+      if (call.contactId) await updateContact(call.contactId, { status: 'callback', action: 'REFERIDO' });
+    } else if (call.contactId) {
+      await updateContact(call.contactId, {
+        personName: appointment.personName,
+        ...(appointment.companyName ? { companyName: appointment.companyName } : {}),
+        role: appointment.role,
+        website: appointment.website,
+        instagram: appointment.instagram,
+        facebook: appointment.facebook,
+        nextCallAt: appointment.start,
+        preferredPeriod,
+        status: appointment.decisionMakerAbsent ? 'callback' : 'scheduled',
+        action: 'SEGUIMIENTO',
+      });
+    }
     await saveCallProgress(call.reference, call);
     return call.appointment;
   })().finally(() => { call.appointmentPromise = null; });
@@ -506,7 +531,7 @@ wss.on('connection', (ws) => {
       if (!openai) throw new Error('OPENAI_NOT_CONFIGURED');
       const stream = await openai.responses.create({
         model,
-        instructions: `${call.instructions}\n\n${schedulingContext()}\nCONTROL ESTRICTO DE RESPUESTA: El mensaje inicial ya fue pronunciado y figura en el historial. Cuando la persona diga su nombre, guardalo y continuá directamente con el flujo: no agradezcas, no digas “mucho gusto” y no repitas el nombre salvo que necesites aclararlo. Respondé exclusivamente sobre páginas web, tiendas online, presencia en Google, publicidad digital o coordinación de una devolución de llamada de Sprice. No cambies de tema. No inventes ejemplos, estadísticas, diagnósticos, servicios, promociones ni información de la empresa. SÉ MUY BREVE: cada turno debe tener como máximo una afirmación corta y una sola pregunta, idealmente menos de 25 palabras y menos de 10 segundos al hablar. No hagas introducciones, listas, resúmenes ni explicaciones largas. Si te piden detalles, explicá un solo punto y esperá. Contestá primero lo último que dijo la persona y luego hacé, como máximo, una sola pregunta relacionada. Si la respuesta fue solamente “sí”, “dale” o “contame”, continuá exactamente con el siguiente paso del flujo: explicá brevemente la importancia de aparecer bien en Google y preguntá si actualmente tienen página web. Si no entendiste, pedí una aclaración breve; nunca rellenes el silencio improvisando.\nREGLAS OBLIGATORIAS PARA AGENDAR: después de ofrecer opciones de día o franja, quedate en silencio y no avances hasta recibir una elección clara. No elijas por la persona. Si responde con una duda, una muletilla o una frase incompleta, decí solamente “Claro, te escucho” y esperá nuevamente. Antes de confirmar que un asesor con más experiencia lo volverá a llamar, obtené el nombre de la persona, el día y la franja. Obtené también el nombre de la empresa o emprendimiento, salvo que la persona haya dicho que no tiene tiempo y solamente haya aceptado otra llamada; en ese caso no prolongues la conversación para pedirlo. Preguntá el cargo de forma natural cuando corresponda; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta los datos obtenidos, el día y la franja. No afirmes que la devolución quedó registrada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.${call.wrapUpRequested ? '\nCIERRE POR TIEMPO: quedan aproximadamente dos minutos antes del máximo configurado. No abras temas nuevos. Priorizá acordar la devolución del asesor, confirmar los datos necesarios y despedirte brevemente.' : ''}`,
+        instructions: `${call.instructions}\n\n${schedulingContext()}\nCONTROL ESTRICTO DE RESPUESTA: El mensaje inicial ya fue pronunciado y figura en el historial. Cuando la persona diga su nombre, guardalo y continuá directamente con el flujo: no agradezcas, no digas “mucho gusto” y no repitas el nombre salvo que necesites aclararlo. Si informa que la persona responsable no está, dejá de presentar servicios. Preguntá, de a una por turno: nombre del responsable, día y franja para encontrarlo, y si se lo encuentra en el mismo número. Si brinda otro teléfono, confirmalo una vez. Respondé exclusivamente sobre páginas web, tiendas online, presencia en Google, publicidad digital o coordinación de una devolución de llamada de Sprice. No cambies de tema. No inventes ejemplos, estadísticas, diagnósticos, servicios, promociones ni información de la empresa. SÉ MUY BREVE: cada turno debe tener como máximo una afirmación corta y una sola pregunta, idealmente menos de 25 palabras y menos de 10 segundos al hablar. No hagas introducciones, listas, resúmenes ni explicaciones largas. Si te piden detalles, explicá un solo punto y esperá. Contestá primero lo último que dijo la persona y luego hacé, como máximo, una sola pregunta relacionada. Si la respuesta fue solamente “sí”, “dale” o “contame”, continuá exactamente con el siguiente paso del flujo: explicá brevemente la importancia de aparecer bien en Google y preguntá si actualmente tienen página web. Si no entendiste, pedí una aclaración breve; nunca rellenes el silencio improvisando.\nREGLAS OBLIGATORIAS PARA AGENDAR: después de ofrecer opciones de día o franja, quedate en silencio y no avances hasta recibir una elección clara. No elijas por la persona. Si responde con una duda, una muletilla o una frase incompleta, decí solamente “Claro, te escucho” y esperá nuevamente. Antes de confirmar que un asesor con más experiencia lo volverá a llamar, obtené el nombre de la persona, el día y la franja. Obtené también el nombre de la empresa o emprendimiento, salvo que la persona haya dicho que no tiene tiempo o que el responsable no estaba; en esos casos no prolongues la conversación para pedirlo. Preguntá el cargo de forma natural cuando corresponda; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta los datos obtenidos, el día y la franja. No afirmes que la devolución quedó registrada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.${call.wrapUpRequested ? '\nCIERRE POR TIEMPO: quedan aproximadamente dos minutos antes del máximo configurado. No abras temas nuevos. Priorizá acordar la devolución del asesor, confirmar los datos necesarios y despedirte brevemente.' : ''}`,
         input: history,
         stream: true,
         max_output_tokens: 80,
