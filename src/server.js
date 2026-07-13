@@ -130,15 +130,15 @@ function rateLimit(req, to) {
   return null;
 }
 
-async function startOutboundCall({ to, contactId, fixedMessage, instructions, automated = false, maxCallSeconds = defaultMaxCallSeconds }) {
+async function startOutboundCall({ to, contactId, fixedMessage = '', instructions = '', automated = false, manualMode = false, maxCallSeconds = defaultMaxCallSeconds }) {
   let contact = null;
   if (contactId && databaseConfigured()) contact = await getContact(contactId);
   const contactContext = contact ? `\n\nFICHA INTERNA DEL CONTACTO (usala como contexto; no leas esta ficha literalmente):\nNombre: ${contact.person_name || 'No informado'}\nEmpresa: ${contact.company_name || 'No informada'}\nKeywords: ${contact.keywords || 'No informadas'}\nWeb: ${contact.website || 'No informada'}\nNota manual: ${contact.notes || 'Sin nota manual'}\nHistorial de llamadas: ${contact.notes_history || 'Sin llamadas anteriores'}\nIntentos anteriores: ${contact.attempts || 0}.\nSi un dato figura como no informado, no lo inventes ni lo menciones. Usá las keywords de manera natural para comprender la actividad del contacto, nunca las recites como una lista.` : '';
   const values = { nombre: contact?.person_name, empresa: contact?.company_name, telefono: to, web: contact?.website, keywords: contact?.keywords || 'servicios como los de ustedes' };
   const personalizedMessage = fixedMessage.replace(/\{\{(nombre|empresa|telefono|web|keywords)\}\}/gi, (_match, key) => values[key.toLowerCase()] || '').trim();
   const reference = crypto.randomUUID();
-  calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated, maxCallSeconds });
-  requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
+  calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], manualTranscript: [], automated, manualMode, maxCallSeconds });
+  requireConfig(manualMode ? ['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_PHONE_NUMBER'] : ['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
   if (!/^AC[0-9a-f]{32}$/i.test(twilioAccountSid)) throw Object.assign(new Error('TWILIO_ACCOUNT_SID_FORMAT'), { code:'TWILIO_ACCOUNT_SID_FORMAT' });
   const useApiKey = /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid) && twilioApiKeySecret.length >= 20;
   if (!useApiKey && twilioAuthToken.length < 20) throw Object.assign(new Error('TWILIO_AUTH_TOKEN_FORMAT'), { code:'TWILIO_AUTH_TOKEN_FORMAT' });
@@ -171,6 +171,8 @@ function publicCall(reference, call) {
     error: call.error || null,
     conversationTurns: call.transcript?.length || 0,
     appointmentCreated: Boolean(call.appointment?.registered),
+    manualMode: Boolean(call.manualMode),
+    manualTranscript: call.manualMode ? call.manualTranscript.slice(-30) : undefined,
   };
 }
 
@@ -432,6 +434,34 @@ app.get('/api/calls/:reference', (req, res) => {
   res.json(publicCall(req.params.reference, call));
 });
 
+app.post('/api/manual-calls', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  const contactId = String(req.body.contactId || '').trim();
+  const contact = contactId ? await getContact(contactId) : null;
+  if (!contact) return res.status(404).json({ error: 'Seleccioná un contacto válido.' });
+  const limitError = rateLimit(req, contact.phone);
+  if (limitError) return res.status(429).json({ error: limitError });
+  try {
+    const started = await startOutboundCall({ to:contact.phone, contactId, manualMode:true, maxCallSeconds:defaultMaxCallSeconds });
+    res.json({ ok:true, ...started, phone:contact.phone, contactName:contact.person_name || contact.company_name || contact.phone });
+  } catch (error) {
+    res.status(502).json({ error:safeCallError(error) });
+  }
+});
+
+app.post('/api/calls/:reference/say', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  const call = calls.get(req.params.reference);
+  const text = String(req.body.text || '').trim();
+  if (!call?.manualMode) return res.status(404).json({ error: 'Llamada manual no encontrada.' });
+  if (!text || text.length > 600) return res.status(400).json({ error: 'El mensaje debe tener entre 1 y 600 caracteres.' });
+  if (!call.relayWs || call.relayWs.readyState !== 1 || call.status !== 'in-progress') return res.status(409).json({ error: 'Esperá a que la persona atienda antes de enviar el mensaje.' });
+  call.relayWs.send(JSON.stringify({ type:'text', token:speechToken(text), last:true, interruptible:true }));
+  call.manualTranscript.push({ role:'assistant', text, at:Date.now() });
+  call.updatedAt = Date.now();
+  res.json({ ok:true });
+});
+
 app.post('/api/calls/:reference/monitor/start', async (req, res) => {
   if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
   const call = calls.get(req.params.reference);
@@ -485,10 +515,8 @@ app.post('/twilio/voice', (req, res) => {
   if (!call) return res.status(404).type('text/xml').send('<Response><Hangup/></Response>');
   const response = new twilio.twiml.VoiceResponse();
   const connect = response.connect();
-  const relay = connect.conversationRelay({
+  const relayOptions = {
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
-    welcomeGreeting: greetingForVoice(call.fixedMessage),
-    welcomeGreetingInterruptible: 'none',
     ttsLanguage: twilioElevenLabsVoiceId ? 'en-US' : 'es-MX',
     ttsProvider: twilioElevenLabsVoiceId ? 'ElevenLabs' : 'Amazon',
     voice: twilioElevenLabsVoiceId || 'Mia-Neural',
@@ -496,7 +524,12 @@ app.post('/twilio/voice', (req, res) => {
     transcriptionLanguage: 'es-US',
     speechTimeout: 2500,
     interruptible: 'speech',
-  });
+  };
+  if (!call.manualMode) {
+    relayOptions.welcomeGreeting = greetingForVoice(call.fixedMessage);
+    relayOptions.welcomeGreetingInterruptible = 'none';
+  }
+  const relay = connect.conversationRelay(relayOptions);
   relay.parameter({ name: 'reference', value: String(req.query.reference) });
   res.type('text/xml').send(response.toString());
 });
@@ -599,11 +632,12 @@ wss.on('connection', (ws) => {
     if (event.type === 'setup') {
       call = calls.get(event.customParameters?.reference);
       if (!call) return ws.close(1008, 'Referencia desconocida');
+      call.relayWs = ws;
       call.status = 'in-progress';
       call.updatedAt = Date.now();
-      history.push({ role: 'assistant', content: call.fixedMessage });
+      if (!call.manualMode) history.push({ role: 'assistant', content: call.fixedMessage });
       const requestWrapUp = () => {
-        if (!call || call.endScheduled || call.appointment?.registered || ws.readyState !== 1) return;
+        if (!call || call.manualMode || call.endScheduled || call.appointment?.registered || ws.readyState !== 1) return;
         if (responding) { wrapUpTimer = setTimeout(requestWrapUp, 3000); return; }
         const transition = 'Para respetar tu tiempo, creo que lo mejor es que un asesor con más experiencia te vuelva a llamar y lo conversen con tranquilidad. ¿Qué día y horario te resultan más cómodos?';
         call.wrapUpRequested = true;
@@ -616,7 +650,7 @@ wss.on('connection', (ws) => {
       const configuredMaximum = call.maxCallSeconds || defaultMaxCallSeconds;
       wrapUpTimer = setTimeout(requestWrapUp, Math.max(60, configuredMaximum - 120) * 1000);
       const requestFinalFarewell = () => {
-        if (!call || call.endScheduled || ws.readyState !== 1) return;
+        if (!call || call.manualMode || call.endScheduled || ws.readyState !== 1) return;
         if (responding) { finalFarewellTimer = setTimeout(requestFinalFarewell, 2000); return; }
         const farewell = 'Muchas gracias por tu tiempo. Para no extenderme más, dejamos la conversación acá y continuamos en la próxima llamada. Que tengas un buen día.';
         ws.send(JSON.stringify({ type: 'text', token: speechToken(farewell), last: true, interruptible: false, preemptible: false }));
@@ -629,6 +663,13 @@ wss.on('connection', (ws) => {
 
     const userText = String(event.voicePrompt || '').trim();
     if (!userText) return;
+    if (call.manualMode) {
+      call.manualTranscript.push({ role:'user', text:userText, at:Date.now() });
+      call.transcript.push({ user:userText, assistant:'', at:Date.now() });
+      call.updatedAt = Date.now();
+      saveCallProgress(call.reference, call).catch(() => {});
+      return;
+    }
     if (/\b(no me llamen|no me interesa|no quiero|terminar|cortá|corta|chau|adiós)\b/i.test(userText)) {
       const farewell = 'Entendido. Gracias por tu tiempo. Hasta luego.';
       ws.send(JSON.stringify({ type: 'text', token: speechToken(farewell), last: true, interruptible: false }));
@@ -691,7 +732,7 @@ wss.on('connection', (ws) => {
       responding = false;
     }
   });
-  ws.on('close', () => { if (wrapUpTimer) clearTimeout(wrapUpTimer); if (finalFarewellTimer) clearTimeout(finalFarewellTimer); });
+  ws.on('close', () => { if (wrapUpTimer) clearTimeout(wrapUpTimer); if (finalFarewellTimer) clearTimeout(finalFarewellTimer); if(call?.relayWs===ws)call.relayWs=null; });
 });
 
 const heartbeat = setInterval(() => {

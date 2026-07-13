@@ -192,6 +192,29 @@ REGLAS ESTRICTAS:
       </div>
       <p id="status-error" class="error-text"></p>
     </section>
+    <section class="manual-console" id="manual-console">
+      <div class="section-heading"><div><p class="eyebrow">CONTROL MANUAL</p><h2>Llamada dirigida por botones</h2></div><span id="manual-state" class="automation-badge">Sin contacto</span></div>
+      <div class="manual-toolbar"><strong id="manual-contact">Elegí “Control manual” en una fila</strong><button type="button" id="manual-start">☎ Iniciar llamada</button><button type="button" id="manual-listen" class="secondary" disabled>🔊 Escuchar</button><button type="button" id="manual-hangup" class="danger" disabled>■ Cortar</button></div>
+      <p id="manual-feedback" class="notice">Sabrina no responderá sola. Vos decidís qué mensaje reproducir.</p>
+      <div class="speech-buttons" id="speech-buttons">
+        <button type="button" data-speech="Hola, mi nombre es Sabrina. Te llamo de Sprice. Nos dedicamos a crear y mejorar páginas web. ¿Tenés un minuto?">Presentación inicial</button>
+        <button type="button" data-speech="¿Actualmente tienen una página web?">¿Tiene página web?</button>
+        <button type="button" data-speech="¿Con quién tengo el gusto?">Pedir nombre</button>
+        <button type="button" data-speech="¿Sos la persona que toma estas decisiones?">Quién decide</button>
+        <button type="button" data-speech="Entiendo. ¿Preferís que un asesor te llame en otro momento o directamente no te interesa?">No tiene tiempo</button>
+        <button type="button" data-speech="Entiendo. ¿Es porque ya tienen página web o porque hoy no es una prioridad?">No le interesa</button>
+        <button type="button" data-speech="Perfecto. ¿Te gustaría que la miremos y te preparemos un informe inicial sin costo?">Ya tiene web</button>
+        <button type="button" data-speech="Eso habla bien del trabajo que hacen. Además de las recomendaciones, ¿te serviría sumar consultas nuevas?">Trabaja por recomendación</button>
+        <button type="button" data-speech="Qué bien, Instagram ya es un canal importante. Una web profesional puede ayudar a que también los encuentren en Google. ¿Te interesaría?">Vende por Instagram</button>
+        <button type="button" data-speech="Eso depende de lo que quieras hacer, pero como referencia es aproximadamente cincuenta mil pesos mensuales.">Pregunta por precio</button>
+        <button type="button" data-speech="¿Qué día y horario te resulta más cómodo para que te llame un asesor?">Coordinar otra llamada</button>
+        <button type="button" data-speech="Perdón, no te escuché bien. ¿Podrías repetírmelo?">No escuché</button>
+        <button type="button" data-speech="Perfecto. Un asesor te vuelve a llamar y lo ven con más detalle.">Confirmar seguimiento</button>
+        <button type="button" data-speech="Muchas gracias por tu tiempo. Que tengas un buen día.">Despedirse</button>
+      </div>
+      <div class="manual-compose"><textarea id="manual-text" maxlength="600" placeholder="Escribí exactamente lo que querés que diga Sabrina"></textarea><button type="button" id="manual-send">Enviar mensaje</button></div>
+      <div id="manual-transcript" class="manual-transcript"><p class="notice">La transcripción aparecerá cuando atiendan.</p></div>
+    </section>
     <section class="automation-section" id="automation">
       <div class="section-heading"><div><p class="eyebrow">AUTOMATIZACIÓN</p><h2>Configuración de llamadas</h2></div><span class="automation-badge">Motor automático</span></div>
       <div class="automation-controls"><button type="button" id="automation-start">▶ Iniciar</button><button type="button" id="automation-pause" class="secondary">⏸ Pausar</button><button type="button" id="automation-stop" class="secondary">■ Detener</button></div>
@@ -249,7 +272,18 @@ REGLAS ESTRICTAS:
     const automationStart = document.querySelector('#automation-start');
     const automationPause = document.querySelector('#automation-pause');
     const automationStop = document.querySelector('#automation-stop');
+    const manualState = document.querySelector('#manual-state');
+    const manualContact = document.querySelector('#manual-contact');
+    const manualFeedback = document.querySelector('#manual-feedback');
+    const manualTranscript = document.querySelector('#manual-transcript');
+    const manualStart = document.querySelector('#manual-start');
+    const manualListen = document.querySelector('#manual-listen');
+    const manualHangup = document.querySelector('#manual-hangup');
+    const manualSend = document.querySelector('#manual-send');
+    const manualText = document.querySelector('#manual-text');
     let selectedContactId = null;
+    let manualSelectedContact = null;
+    let manualCallReference = null;
     let loadedContacts = [];
     const selectedContacts = new Set();
     let liveMonitor = null;
@@ -295,6 +329,46 @@ REGLAS ESTRICTAS:
       if(liveMonitor?.reference===reference)await stopLiveMonitor(false);
       await loadContacts();
     }
+
+    function renderManualTranscript(items=[]) {
+      manualTranscript.innerHTML='';
+      if(!items.length){manualTranscript.innerHTML='<p class="notice">La transcripción aparecerá cuando atiendan.</p>';return;}
+      for(const item of items){const line=document.createElement('p');line.className=item.role==='user'?'manual-user':'manual-assistant';line.textContent=`${item.role==='user'?'CONTACTO':'SABRINA'}: ${item.text}`;manualTranscript.append(line);}
+      manualTranscript.scrollTop=manualTranscript.scrollHeight;
+    }
+
+    function setManualControls(active) {
+      manualListen.disabled=!active; manualHangup.disabled=!active; manualSend.disabled=!active;
+      document.querySelectorAll('#speech-buttons button').forEach((item)=>{item.disabled=!active;});
+    }
+
+    async function refreshManualCall() {
+      if(!manualCallReference||!adminToken.value)return;
+      const response=await fetch(`/api/calls/${manualCallReference}`,{headers:{'x-admin-token':adminToken.value}}); if(!response.ok)return;
+      const call=await response.json(); const labels={queued:'Llamando',initiated:'Marcando',ringing:'Sonando',answered:'Atendida','in-progress':'En conversación',completed:'Finalizada',busy:'Ocupado','no-answer':'No atendió',failed:'Error',canceled:'Cancelada'};
+      manualState.textContent=labels[call.status]||call.status; renderManualTranscript(call.manualTranscript||[]);
+      const active=call.status==='in-progress'; setManualControls(active);
+      if(['completed','busy','no-answer','failed','canceled'].includes(call.status)){manualStart.disabled=false;if(liveMonitor?.reference===manualCallReference)stopLiveMonitor(false);}
+    }
+
+    async function sendManualSpeech(text) {
+      if(!manualCallReference)return alert('Primero iniciá una llamada manual.');
+      const response=await fetch(`/api/calls/${manualCallReference}/say`,{method:'POST',headers:{'content-type':'application/json','x-admin-token':adminToken.value},body:JSON.stringify({text})}); const body=await response.json();
+      if(!response.ok)return alert(body.error); manualFeedback.textContent=`Enviado: “${text}”`; manualText.value=''; await refreshManualCall();
+    }
+
+    manualStart.addEventListener('click',async()=>{
+      if(!manualSelectedContact)return alert('Elegí Control manual en la fila del contacto.'); if(!adminToken.value)return alert('Ingresá la clave administrativa.');
+      manualStart.disabled=true; manualState.textContent='Iniciando'; manualFeedback.textContent='Enviando llamada a Twilio…';
+      const response=await fetch('/api/manual-calls',{method:'POST',headers:{'content-type':'application/json','x-admin-token':adminToken.value},body:JSON.stringify({contactId:manualSelectedContact.id})}); const body=await response.json();
+      if(!response.ok){manualStart.disabled=false;manualState.textContent='Error';manualFeedback.textContent=body.error;return;}
+      manualCallReference=body.reference; manualFeedback.textContent='Llamando. Los botones se habilitarán cuando atiendan.'; await refreshManualCall();
+    });
+    manualListen.addEventListener('click',()=>startLiveMonitor(manualCallReference,manualListen));
+    manualHangup.addEventListener('click',()=>hangupLiveCall(manualCallReference));
+    manualSend.addEventListener('click',()=>sendManualSpeech(manualText.value.trim()));
+    document.querySelectorAll('#speech-buttons button').forEach((item)=>item.addEventListener('click',()=>sendManualSpeech(item.dataset.speech)));
+    setManualControls(false);
 
     function updateMode() {
       adminToken.required = !dryRun.checked;
@@ -441,8 +515,8 @@ REGLAS ESTRICTAS:
         const note=document.createElement('span'); note.className='note-cell'; const noteButton=document.createElement('button'); noteButton.type='button'; noteButton.className='history-button'; noteButton.textContent=history.length?`Ver historial (${history.length})`:'Sin historial'; noteButton.disabled=!history.length&&!contact.notes;
         noteButton.addEventListener('click',()=>{historyTitle.textContent=[contact.person_name,contact.company_name,contact.phone].filter(Boolean).join(' · ');historyContent.innerHTML='';if(contact.notes){const manual=document.createElement('article');manual.innerHTML='<small>NOTA GENERAL</small>';const text=document.createElement('p');text.textContent=contact.notes;manual.append(text);historyContent.append(manual);}for(const item of history){const entry=document.createElement('article');const when=new Date(item.startedAt).toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',dateStyle:'short',timeStyle:'short'});const seconds=item.endedAt?Math.max(0,Math.round((new Date(item.endedAt)-new Date(item.startedAt))/1000)):null;const meta=document.createElement('small');meta.textContent=`${when}${seconds===null?'':` · ${seconds}s`} · ${item.status||'Sin estado'}`;const summary=document.createElement('p');summary.textContent=item.summary||'Sin resumen disponible.';entry.append(meta,summary);historyContent.append(entry);}historyDialog.showModal();});note.append(noteButton);card.append(note);
         const callButton = document.createElement('button');
-        callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Llamar';
-        callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
+        callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Control manual';
+        callButton.addEventListener('click', () => { manualSelectedContact=contact;manualCallReference=null;manualContact.textContent=[contact.person_name,contact.company_name,contact.phone].filter(Boolean).join(' · ');manualState.textContent='Preparada';manualFeedback.textContent='Pulsá Iniciar llamada. Sabrina esperará tus botones.';manualStart.disabled=false;setManualControls(false);renderManualTranscript([]);document.querySelector('#manual-console').scrollIntoView({behavior:'smooth'}); });
         const actionCell=document.createElement('span'); actionCell.className='call-actions'; actionCell.append(callButton);
         card.append(actionCell);
         const started=contact.last_call_started_at?new Date(contact.last_call_started_at):null;
@@ -510,7 +584,7 @@ REGLAS ESTRICTAS:
 
     const savedToken=sessionStorage.getItem('crmAdminToken');
     if (savedToken) { adminToken.value=savedToken; loadContacts(); loadAutomation(); loadAutomationStatus(); }
-    setInterval(()=>{loadAutomationStatus();refreshContactsSilently();},5000);
+    setInterval(()=>{loadAutomationStatus();refreshContactsSilently();refreshManualCall();},3000);
 
     document.querySelector('#load-contacts').addEventListener('click', loadContacts);
     importForm.addEventListener('submit', async (event) => {
