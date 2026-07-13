@@ -453,7 +453,7 @@ REGLAS ESTRICTAS:
     }
 
     async function refreshContactsSilently() {
-      if(!adminToken.value || contactsList.contains(document.activeElement) || searchInput.value.trim())return;
+      if(!adminToken.value || document.activeElement?.matches('.grid-input') || searchInput.value.trim())return;
       const response=await fetch('/api/contacts',{headers:{'x-admin-token':adminToken.value}}); if(!response.ok)return;
       const body=await response.json(); renderContacts(body.contacts);
     }
