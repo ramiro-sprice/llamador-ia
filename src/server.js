@@ -25,6 +25,8 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPE
 const elevenLabsVoiceId = String(process.env.ELEVENLABS_VOICE_ID || '').trim();
 const twilioAccountSid = String(process.env.TWILIO_ACCOUNT_SID || '').trim();
 const twilioAuthToken = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
+const twilioApiKeySid = String(process.env.TWILIO_API_KEY_SID || '').trim();
+const twilioApiKeySecret = String(process.env.TWILIO_API_KEY_SECRET || '').trim();
 const twilioPhoneNumber = String(process.env.TWILIO_PHONE_NUMBER || '').trim();
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_MAX_CALLS = 5;
@@ -113,10 +115,13 @@ async function startOutboundCall({ to, contactId, fixedMessage, instructions, au
   const personalizedMessage = fixedMessage.replace(/\{\{(nombre|empresa|telefono|web|keywords)\}\}/gi, (_match, key) => values[key.toLowerCase()] || '').trim();
   const reference = crypto.randomUUID();
   calls.set(reference, { reference, to, contactId, fixedMessage: personalizedMessage, instructions: `${instructions}${contactContext}`, createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', transcript: [], automated, maxCallSeconds });
-  requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
+  requireConfig(['PUBLIC_URL', 'TWILIO_ACCOUNT_SID', 'TWILIO_PHONE_NUMBER', 'OPENAI_API_KEY']);
   if (!/^AC[0-9a-f]{32}$/i.test(twilioAccountSid)) throw Object.assign(new Error('TWILIO_ACCOUNT_SID_FORMAT'), { code:'TWILIO_ACCOUNT_SID_FORMAT' });
-  if (twilioAuthToken.length < 20) throw Object.assign(new Error('TWILIO_AUTH_TOKEN_FORMAT'), { code:'TWILIO_AUTH_TOKEN_FORMAT' });
-  const client = twilio(twilioAccountSid, twilioAuthToken);
+  const useApiKey = /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid) && twilioApiKeySecret.length >= 20;
+  if (!useApiKey && twilioAuthToken.length < 20) throw Object.assign(new Error('TWILIO_AUTH_TOKEN_FORMAT'), { code:'TWILIO_AUTH_TOKEN_FORMAT' });
+  const client = useApiKey
+    ? twilio(twilioApiKeySid, twilioApiKeySecret, { accountSid: twilioAccountSid })
+    : twilio(twilioAccountSid, twilioAuthToken);
   const outbound = await client.calls.create({ to, from: twilioPhoneNumber, url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`, statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`, statusCallbackEvent: ['initiated','ringing','answered','completed'], timeout: 30, timeLimit: maxCallSeconds });
   calls.get(reference).sid = outbound.sid;
   await saveCallStart(reference, contactId, outbound.sid, 'queued');
