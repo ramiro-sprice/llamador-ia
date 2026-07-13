@@ -17,6 +17,8 @@ const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const mediaWss = new WebSocketServer({ noServer: true });
+const monitorWss = new WebSocketServer({ noServer: true });
 const port = Number(process.env.PORT || 3000);
 const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
@@ -37,11 +39,27 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const calls = new Map();
+const monitorTickets = new Map();
+const monitorBrowsers = new Map();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
 const attemptsByIp = new Map();
 const lastCallByNumber = new Map();
 let automationTickBusy = false;
 let lastAutomationLaunchAt = 0;
+
+function twilioClient() {
+  const useApiKey = /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid) && twilioApiKeySecret.length >= 20;
+  return useApiKey
+    ? twilio(twilioApiKeySid, twilioApiKeySecret, { accountSid: twilioAccountSid })
+    : twilio(twilioAccountSid, twilioAuthToken);
+}
+
+async function stopMonitorStream(call) {
+  if (!call?.monitorStreamSid || !call.sid) return;
+  const streamSid = call.monitorStreamSid;
+  call.monitorStreamSid = null;
+  await twilioClient().calls(call.sid).streams(streamSid).update({ status: 'stopped' }).catch(() => {});
+}
 
 function argentinaNumber(value) {
   return /^\+54\d{10,13}$/.test(String(value || '').replace(/[\s()-]/g, ''));
@@ -123,9 +141,7 @@ async function startOutboundCall({ to, contactId, fixedMessage, instructions, au
   if (!/^AC[0-9a-f]{32}$/i.test(twilioAccountSid)) throw Object.assign(new Error('TWILIO_ACCOUNT_SID_FORMAT'), { code:'TWILIO_ACCOUNT_SID_FORMAT' });
   const useApiKey = /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid) && twilioApiKeySecret.length >= 20;
   if (!useApiKey && twilioAuthToken.length < 20) throw Object.assign(new Error('TWILIO_AUTH_TOKEN_FORMAT'), { code:'TWILIO_AUTH_TOKEN_FORMAT' });
-  const client = useApiKey
-    ? twilio(twilioApiKeySid, twilioApiKeySecret, { accountSid: twilioAccountSid })
-    : twilio(twilioAccountSid, twilioAuthToken);
+  const client = twilioClient();
   const outbound = await client.calls.create({
     to,
     from: twilioPhoneNumber,
@@ -246,7 +262,13 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/contacts', async (req, res) => {
   if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
   if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
-  try { res.json({ contacts: await listContacts() }); }
+  try {
+    const contacts = await listContacts();
+    const activeByContact = new Map([...calls.values()]
+      .filter((call) => call.contactId && ['answered','in-progress'].includes(call.status))
+      .map((call) => [call.contactId, call.reference]));
+    res.json({ contacts: contacts.map((contact) => ({ ...contact, active_reference: activeByContact.get(contact.id) || null })) });
+  }
   catch { res.status(500).json({ error: 'No se pudieron cargar los contactos.' }); }
 });
 
@@ -391,6 +413,36 @@ app.get('/api/calls/:reference', (req, res) => {
   res.json(publicCall(req.params.reference, call));
 });
 
+app.post('/api/calls/:reference/monitor/start', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  const call = calls.get(req.params.reference);
+  if (!call || !call.sid || !['answered','in-progress'].includes(call.status)) return res.status(409).json({ error: 'La llamada ya no está disponible para escuchar.' });
+  try {
+    if (!call.monitorSecret) call.monitorSecret = crypto.randomBytes(24).toString('hex');
+    if (!call.monitorStreamSid) {
+      const stream = await twilioClient().calls(call.sid).streams.create({
+        url: `${publicUrl.replace(/^http/, 'ws')}/media/${call.reference}/${call.monitorSecret}`,
+        track: 'both_tracks',
+      });
+      call.monitorStreamSid = stream.sid;
+    }
+    const ticket = crypto.randomBytes(24).toString('hex');
+    monitorTickets.set(ticket, { reference: call.reference, expiresAt: Date.now() + 60000 });
+    res.json({ ticket, websocketUrl: `${publicUrl.replace(/^http/, 'ws')}/monitor?ticket=${ticket}` });
+  } catch (error) {
+    console.error('No se pudo iniciar el monitoreo:', error?.code || error?.message || 'unknown');
+    res.status(502).json({ error: 'Twilio no pudo abrir el audio en vivo.' });
+  }
+});
+
+app.post('/api/calls/:reference/monitor/stop', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  const call = calls.get(req.params.reference);
+  await stopMonitorStream(call);
+  for (const browser of monitorBrowsers.get(req.params.reference) || []) browser.close(1000, 'Monitoreo detenido');
+  res.json({ ok: true });
+});
+
 app.post('/twilio/voice', (req, res) => {
   const call = calls.get(String(req.query.reference || ''));
   if (!call) return res.status(404).type('text/xml').send('<Response><Hangup/></Response>');
@@ -419,6 +471,7 @@ app.post('/twilio/status', (req, res) => {
     call.updatedAt = Date.now();
     saveCallProgress(String(req.query.reference || ''), call).catch(() => {});
     if (call.status === 'completed') {
+      stopMonitorStream(call).catch(() => {});
       const finalHistory = (call.transcript || []).flatMap((turn) => [
         { role: 'user', content: turn.user || '' },
         { role: 'assistant', content: turn.assistant || '' },
@@ -451,8 +504,47 @@ app.post('/twilio/recording', async (req, res) => {
 });
 
 server.on('upgrade', (request, socket, head) => {
-  if (new URL(request.url, 'http://localhost').pathname !== '/conversation') return socket.destroy();
-  wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+  const url = new URL(request.url, 'http://localhost');
+  if (url.pathname === '/conversation') return wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+  if (url.pathname.startsWith('/media/')) return mediaWss.handleUpgrade(request, socket, head, (ws) => mediaWss.emit('connection', ws, request));
+  if (url.pathname === '/monitor') return monitorWss.handleUpgrade(request, socket, head, (ws) => monitorWss.emit('connection', ws, request));
+  socket.destroy();
+});
+
+mediaWss.on('connection', (ws, request) => {
+  const parts = new URL(request.url, 'http://localhost').pathname.split('/');
+  const reference = parts[2];
+  const secret = parts[3];
+  const call = calls.get(reference);
+  if (!call || !call.monitorSecret || secret !== call.monitorSecret) return ws.close(1008, 'No autorizado');
+  ws.on('message', (raw) => {
+    let event;
+    try { event = JSON.parse(raw.toString()); } catch { return; }
+    if (event.event !== 'media' || !event.media?.payload) return;
+    const message = JSON.stringify({ type:'audio', track:event.media.track || 'unknown', payload:event.media.payload });
+    for (const browser of monitorBrowsers.get(reference) || []) if (browser.readyState === 1) browser.send(message);
+  });
+  ws.on('close', () => {
+    for (const browser of monitorBrowsers.get(reference) || []) if (browser.readyState === 1) browser.send(JSON.stringify({ type:'ended' }));
+  });
+});
+
+monitorWss.on('connection', (ws, request) => {
+  const ticket = new URL(request.url, 'http://localhost').searchParams.get('ticket');
+  const access = monitorTickets.get(ticket);
+  monitorTickets.delete(ticket);
+  if (!access || access.expiresAt < Date.now() || !calls.has(access.reference)) return ws.close(1008, 'No autorizado');
+  const browsers = monitorBrowsers.get(access.reference) || new Set();
+  browsers.add(ws);
+  monitorBrowsers.set(access.reference, browsers);
+  ws.send(JSON.stringify({ type:'ready' }));
+  ws.on('close', () => {
+    browsers.delete(ws);
+    if (!browsers.size) {
+      monitorBrowsers.delete(access.reference);
+      stopMonitorStream(calls.get(access.reference)).catch(() => {});
+    }
+  });
 });
 
 wss.on('connection', (ws) => {

@@ -252,6 +252,41 @@ REGLAS ESTRICTAS:
     let selectedContactId = null;
     let loadedContacts = [];
     const selectedContacts = new Set();
+    let liveMonitor = null;
+
+    function decodeMulaw(byte) {
+      byte = ~byte & 255;
+      const sign = byte & 128 ? -1 : 1;
+      const exponent = (byte >> 4) & 7;
+      const mantissa = byte & 15;
+      return sign * ((((mantissa << 3) + 132) << exponent) - 132) / 32768;
+    }
+
+    async function stopLiveMonitor(notifyServer=true) {
+      if (!liveMonitor) return;
+      const current=liveMonitor; liveMonitor=null;
+      if(current.socket?.readyState<2)current.socket.close();
+      if(current.context)await current.context.close().catch(()=>{});
+      if(notifyServer)fetch(`/api/calls/${current.reference}/monitor/stop`,{method:'POST',headers:{'x-admin-token':adminToken.value}}).catch(()=>{});
+      document.querySelectorAll('.monitor-button').forEach((item)=>{item.textContent='🔊 Escuchar';item.classList.remove('danger');});
+    }
+
+    async function startLiveMonitor(reference, control) {
+      if(liveMonitor?.reference===reference){await stopLiveMonitor();return;}
+      await stopLiveMonitor();
+      const response=await fetch(`/api/calls/${reference}/monitor/start`,{method:'POST',headers:{'x-admin-token':adminToken.value}});
+      const body=await response.json(); if(!response.ok)return alert(body.error);
+      const context=new (window.AudioContext||window.webkitAudioContext)({sampleRate:8000}); await context.resume();
+      const socket=new WebSocket(body.websocketUrl); const next={inbound:context.currentTime,outbound:context.currentTime,unknown:context.currentTime};
+      liveMonitor={reference,socket,context,next}; control.textContent='■ Dejar de escuchar'; control.classList.add('danger');
+      socket.onmessage=(message)=>{
+        const event=JSON.parse(message.data); if(event.type==='ended')return stopLiveMonitor(false); if(event.type!=='audio')return;
+        const binary=atob(event.payload); const samples=new Float32Array(binary.length); for(let i=0;i<binary.length;i++)samples[i]=decodeMulaw(binary.charCodeAt(i));
+        const buffer=context.createBuffer(1,samples.length,8000); buffer.copyToChannel(samples,0); const source=context.createBufferSource(); source.buffer=buffer; source.connect(context.destination);
+        const track=event.track in next?event.track:'unknown'; const start=Math.max(context.currentTime+.03,next[track]); source.start(start); next[track]=start+buffer.duration;
+      };
+      socket.onclose=()=>{if(liveMonitor?.socket===socket)stopLiveMonitor(false);};
+    }
 
     function updateMode() {
       adminToken.required = !dryRun.checked;
@@ -392,7 +427,9 @@ REGLAS ESTRICTAS:
         const callButton = document.createElement('button');
         callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Llamar';
         callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
-        card.append(callButton);
+        const actionCell=document.createElement('span'); actionCell.className='call-actions'; actionCell.append(callButton);
+        if(contact.active_reference){const monitor=document.createElement('button');monitor.type='button';monitor.className='secondary monitor-button';monitor.textContent=liveMonitor?.reference===contact.active_reference?'■ Dejar de escuchar':'🔊 Escuchar';if(liveMonitor?.reference===contact.active_reference)monitor.classList.add('danger');monitor.addEventListener('click',()=>startLiveMonitor(contact.active_reference,monitor));actionCell.append(monitor);}
+        card.append(actionCell);
         const started=contact.last_call_started_at?new Date(contact.last_call_started_at):null;
         const hour=document.createElement('span'); hour.className='fixed-cell'; hour.textContent=started?started.toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',dateStyle:'short',timeStyle:'short'}):'—';
         const duration=document.createElement('span'); duration.className='fixed-cell'; duration.textContent=started&&contact.last_call_ended_at?`${Math.max(0,Math.round((new Date(contact.last_call_ended_at)-started)/1000))}s`:'—';
