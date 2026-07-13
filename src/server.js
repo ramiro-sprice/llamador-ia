@@ -79,7 +79,13 @@ function safeCallError(error) {
 function greetingForVoice(text) {
   if (twilioElevenLabsVoiceId) return String(text || '').replace(/\[\[\]\]/g, '…\n\n');
   const escaped = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-  return `<speak>${escaped.replace(/\[\[\]\]/g, '<break time="1s"/>')}</speak>`;
+  return `<speak><prosody volume="x-loud">${escaped.replace(/\[\[\]\]/g, '<break time="1s"/>')}</prosody></speak>`;
+}
+
+function speechToken(text) {
+  if (twilioElevenLabsVoiceId) return String(text || '');
+  const escaped = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  return `<prosody volume="x-loud">${escaped}</prosody>`;
 }
 
 function endAfterSpeech(ws, call, text, reason = 'assistant-ended-call') {
@@ -420,7 +426,7 @@ wss.on('connection', (ws) => {
         history.push({ role: 'assistant', content: transition });
         call.transcript.push({ user: '', assistant: transition, at: Date.now() });
         call.updatedAt = Date.now();
-        ws.send(JSON.stringify({ type: 'text', token: transition, last: true, interruptible: true, preemptible: false }));
+        ws.send(JSON.stringify({ type: 'text', token: speechToken(transition), last: true, interruptible: true, preemptible: false }));
         saveCallProgress(call.reference, call).catch(() => {});
       };
       const configuredMaximum = call.maxCallSeconds || defaultMaxCallSeconds;
@@ -429,7 +435,7 @@ wss.on('connection', (ws) => {
         if (!call || call.endScheduled || ws.readyState !== 1) return;
         if (responding) { finalFarewellTimer = setTimeout(requestFinalFarewell, 2000); return; }
         const farewell = 'Muchas gracias por tu tiempo. Para no extenderme más, dejamos la conversación acá y continuamos en la próxima llamada. Que tengas un buen día.';
-        ws.send(JSON.stringify({ type: 'text', token: farewell, last: true, interruptible: false, preemptible: false }));
+        ws.send(JSON.stringify({ type: 'text', token: speechToken(farewell), last: true, interruptible: false, preemptible: false }));
         endAfterSpeech(ws, call, farewell, 'maximum-duration-reached');
       };
       finalFarewellTimer = setTimeout(requestFinalFarewell, Math.max(90, configuredMaximum - 30) * 1000);
@@ -441,7 +447,7 @@ wss.on('connection', (ws) => {
     if (!userText) return;
     if (/\b(no me llamen|no me interesa|no quiero|terminar|cortá|corta|chau|adiós)\b/i.test(userText)) {
       const farewell = 'Entendido. Gracias por tu tiempo. Hasta luego.';
-      ws.send(JSON.stringify({ type: 'text', token: farewell, last: true, interruptible: false }));
+      ws.send(JSON.stringify({ type: 'text', token: speechToken(farewell), last: true, interruptible: false }));
       endAfterSpeech(ws, call, farewell, 'recipient-ended-call');
       call.status = 'completed';
       call.updatedAt = Date.now();
@@ -468,11 +474,11 @@ wss.on('connection', (ws) => {
       for await (const chunk of stream) {
         if (chunk.type === 'response.output_text.delta') {
           answer += chunk.delta;
-          if (pendingToken) ws.send(JSON.stringify({ type: 'text', token: pendingToken, last: false, interruptible: true }));
+          if (pendingToken) ws.send(JSON.stringify({ type: 'text', token: speechToken(pendingToken), last: false, interruptible: true }));
           pendingToken = chunk.delta;
         }
       }
-      if (pendingToken) ws.send(JSON.stringify({ type: 'text', token: pendingToken, last: true, interruptible: true }));
+      if (pendingToken) ws.send(JSON.stringify({ type: 'text', token: speechToken(pendingToken), last: true, interruptible: true }));
       history.push({ role: 'assistant', content: answer });
       if (history.length > 24) history.splice(0, history.length - 24);
       call.transcript.push({ user: userText, assistant: answer, at: Date.now() });
@@ -481,10 +487,10 @@ wss.on('connection', (ws) => {
       if (/\b(hasta luego|que tengas (?:un )?buen(?:o)? (?:día|tarde)|chau|adiós|me despido|gracias por tu tiempo)\b/i.test(answer)) endAfterSpeech(ws, call, answer);
       const appointment = await ensureAppointment(call, history);
       if (appointment) {
-          ws.send(JSON.stringify({ type: 'text', token: 'Perfecto. Ya registré el horario para que un asesor con más experiencia te vuelva a llamar.', last: true, interruptible: true }));
+          ws.send(JSON.stringify({ type: 'text', token: speechToken('Perfecto. Ya registré el horario para que un asesor con más experiencia te vuelva a llamar.'), last: true, interruptible: true }));
       }
     } catch (error) {
-      ws.send(JSON.stringify({ type: 'text', token: 'Disculpá, tuve un problema técnico. La llamada finalizará.', last: true }));
+      ws.send(JSON.stringify({ type: 'text', token: speechToken('Disculpá, tuve un problema técnico. La llamada finalizará.'), last: true }));
       call.error = error?.status === 401 ? 'OpenAI rechazó la credencial.' : error?.status === 429 ? 'OpenAI no tiene cuota disponible.' : 'No se pudo generar la respuesta.';
       call.updatedAt = Date.now();
       console.error('Error de IA durante llamada:', error?.status || error?.code || 'unknown');
