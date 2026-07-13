@@ -8,7 +8,7 @@ import OpenAI from 'openai';
 import twilio from 'twilio';
 import multer from 'multer';
 import { WebSocketServer } from 'ws';
-import { automationStats, claimNextAutomationContact, createContact, databaseConfigured, deleteContacts, getAutomationSettings, getContact, importContacts, initializeDatabase, listContacts, recoverInterruptedContacts, releaseAutomationContact, saveAutomationSettings, saveCallProgress, saveCallStart, setAutomationState, updateContact } from './database.js';
+import { automationStats, claimNextAutomationContact, createContact, databaseConfigured, deleteContacts, getAutomationSettings, getContact, importContacts, initializeDatabase, listContacts, recoverInterruptedContacts, releaseAutomationContact, saveAutomationSettings, saveCallProgress, saveCallRecording, saveCallStart, setAutomationState, updateContact } from './database.js';
 import { automationAllowedNow, schedulingContext } from './calendar.js';
 import { parseContactFile } from './importer.js';
 
@@ -128,7 +128,19 @@ async function startOutboundCall({ to, contactId, fixedMessage, instructions, au
   const client = useApiKey
     ? twilio(twilioApiKeySid, twilioApiKeySecret, { accountSid: twilioAccountSid })
     : twilio(twilioAccountSid, twilioAuthToken);
-  const outbound = await client.calls.create({ to, from: twilioPhoneNumber, url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`, statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`, statusCallbackEvent: ['initiated','ringing','answered','completed'], timeout: 30, timeLimit: maxCallSeconds });
+  const outbound = await client.calls.create({
+    to,
+    from: twilioPhoneNumber,
+    url: `${publicUrl}/twilio/voice?reference=${encodeURIComponent(reference)}`,
+    statusCallback: `${publicUrl}/twilio/status?reference=${encodeURIComponent(reference)}`,
+    statusCallbackEvent: ['initiated','ringing','answered','completed'],
+    record: true,
+    recordingChannels: 'dual',
+    recordingStatusCallback: `${publicUrl}/twilio/recording?reference=${encodeURIComponent(reference)}`,
+    recordingStatusCallbackEvent: ['completed','absent'],
+    timeout: 30,
+    timeLimit: maxCallSeconds,
+  });
   calls.get(reference).sid = outbound.sid;
   await saveCallStart(reference, contactId, outbound.sid, 'queued');
   return { reference, sid: outbound.sid };
@@ -363,7 +375,7 @@ app.post('/twilio/voice', (req, res) => {
   const connect = response.connect();
   const relay = connect.conversationRelay({
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
-    welcomeGreeting: greetingForVoice(call.fixedMessage),
+    welcomeGreeting: greetingForVoice(`Esta llamada será grabada para registrar la conversación.\n\n${call.fixedMessage}`),
     welcomeGreetingInterruptible: 'none',
     ttsLanguage: twilioElevenLabsVoiceId ? 'en-US' : 'es-MX',
     ttsProvider: twilioElevenLabsVoiceId ? 'ElevenLabs' : 'Amazon',
@@ -393,6 +405,24 @@ app.post('/twilio/status', (req, res) => {
       });
     }
   }
+  res.sendStatus(204);
+});
+
+app.post('/twilio/recording', async (req, res) => {
+  const reference = String(req.query.reference || '');
+  const call = calls.get(reference);
+  if (call) {
+    call.recording = {
+      sid: String(req.body.RecordingSid || ''),
+      status: String(req.body.RecordingStatus || ''),
+      duration: Number.parseInt(req.body.RecordingDuration || '', 10),
+    };
+  }
+  await saveCallRecording(reference, {
+    sid: String(req.body.RecordingSid || ''),
+    status: String(req.body.RecordingStatus || ''),
+    duration: Number.parseInt(req.body.RecordingDuration || '', 10),
+  }).catch(() => {});
   res.sendStatus(204);
 });
 

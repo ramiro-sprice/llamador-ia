@@ -46,6 +46,9 @@ export async function initializeDatabase() {
       reference UUID NOT NULL UNIQUE,
       contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
       twilio_sid TEXT,
+      recording_sid TEXT,
+      recording_status TEXT,
+      recording_duration INTEGER,
       status TEXT NOT NULL,
       summary TEXT,
       transcript JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -53,6 +56,9 @@ export async function initializeDatabase() {
       ended_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE call_records ADD COLUMN IF NOT EXISTS recording_sid TEXT;
+    ALTER TABLE call_records ADD COLUMN IF NOT EXISTS recording_status TEXT;
+    ALTER TABLE call_records ADD COLUMN IF NOT EXISTS recording_duration INTEGER;
     CREATE TABLE IF NOT EXISTS automation_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       status TEXT NOT NULL DEFAULT 'paused',
@@ -221,6 +227,16 @@ export async function saveCallProgress(reference, call) {
       : null;
     if (contactStatus) await pool.query(`UPDATE contacts SET status=$1, updated_at=NOW() WHERE id=$2 AND status NOT IN ('scheduled','not-interested')`, [contactStatus, call.contactId]);
   }
+}
+
+export async function saveCallRecording(reference, recording) {
+  if (!pool) return;
+  await pool.query(`UPDATE call_records SET recording_sid=$1, recording_status=$2, recording_duration=$3 WHERE reference=$4`, [
+    recording.sid || null,
+    recording.status || null,
+    Number.isFinite(recording.duration) ? recording.duration : null,
+    reference,
+  ]);
 }
 
 export async function closeDatabase() {
