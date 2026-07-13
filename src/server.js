@@ -22,7 +22,7 @@ const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const model = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
 const defaultMaxCallSeconds = 8 * 60;
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-const elevenLabsVoiceId = String(process.env.ELEVENLABS_VOICE_ID || '').trim();
+const twilioElevenLabsVoiceId = String(process.env.TWILIO_ELEVENLABS_VOICE_ID || '').trim();
 const twilioAccountSid = String(process.env.TWILIO_ACCOUNT_SID || '').trim();
 const twilioAuthToken = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
 const twilioApiKeySid = String(process.env.TWILIO_API_KEY_SID || '').trim();
@@ -77,7 +77,7 @@ function safeCallError(error) {
 }
 
 function greetingForVoice(text) {
-  if (elevenLabsVoiceId) return String(text || '').replace(/\[\[\]\]/g, '…\n\n');
+  if (twilioElevenLabsVoiceId) return String(text || '').replace(/\[\[\]\]/g, '…\n\n');
   const escaped = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
   return `<speak>${escaped.replace(/\[\[\]\]/g, '<break time="1s"/>')}</speak>`;
 }
@@ -357,11 +357,12 @@ app.post('/twilio/voice', (req, res) => {
   const connect = response.connect();
   const relay = connect.conversationRelay({
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
+    welcomeGreeting: greetingForVoice(call.fixedMessage),
     welcomeGreetingInterruptible: 'none',
-    ttsLanguage: elevenLabsVoiceId ? 'es-US' : 'es-MX',
-    ttsProvider: elevenLabsVoiceId ? 'ElevenLabs' : 'Amazon',
-    voice: elevenLabsVoiceId || 'Mia-Neural',
-    ...(elevenLabsVoiceId ? { elevenlabsTextNormalization: 'on' } : {}),
+    ttsLanguage: twilioElevenLabsVoiceId ? 'en-US' : 'es-MX',
+    ttsProvider: twilioElevenLabsVoiceId ? 'ElevenLabs' : 'Amazon',
+    voice: twilioElevenLabsVoiceId || 'Mia-Neural',
+    ...(twilioElevenLabsVoiceId ? { elevenlabsTextNormalization: 'on' } : {}),
     transcriptionLanguage: 'es-US',
     interruptible: 'speech',
   });
@@ -411,7 +412,6 @@ wss.on('connection', (ws) => {
       if (!call) return ws.close(1008, 'Referencia desconocida');
       call.status = 'in-progress';
       call.updatedAt = Date.now();
-      ws.send(JSON.stringify({ type: 'text', token: greetingForVoice(call.fixedMessage), last: true, interruptible: false, preemptible: false }));
       const requestWrapUp = () => {
         if (!call || call.endScheduled || call.appointment?.registered || ws.readyState !== 1) return;
         if (responding) { wrapUpTimer = setTimeout(requestWrapUp, 3000); return; }
