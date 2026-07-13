@@ -446,6 +446,24 @@ app.post('/api/calls/:reference/monitor/stop', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/calls/:reference/hangup', async (req, res) => {
+  if (!validAdminToken(adminTokenFrom(req))) return res.status(403).json({ error: 'No autorizado.' });
+  const call = calls.get(req.params.reference);
+  if (!call?.sid || ['completed','failed','busy','no-answer','canceled'].includes(call.status)) return res.status(409).json({ error: 'La llamada ya finalizó.' });
+  try {
+    await twilioClient().calls(call.sid).update({ status: 'completed' });
+    call.status = 'completed';
+    call.updatedAt = Date.now();
+    await stopMonitorStream(call);
+    await saveCallProgress(call.reference, call);
+    if (call.contactId) await updateContact(call.contactId, { status: 'callback', action: 'REINTENTAR' });
+    res.json({ ok: true, status: call.status });
+  } catch (error) {
+    console.error('No se pudo cortar la llamada:', error?.code || error?.message || 'unknown');
+    res.status(502).json({ error: 'Twilio no pudo finalizar la llamada.' });
+  }
+});
+
 app.post('/twilio/voice', (req, res) => {
   const call = calls.get(String(req.query.reference || ''));
   if (!call) return res.status(404).type('text/xml').send('<Response><Hangup/></Response>');

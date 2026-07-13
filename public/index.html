@@ -288,6 +288,14 @@ REGLAS ESTRICTAS:
       socket.onclose=()=>{if(liveMonitor?.socket===socket)stopLiveMonitor(false);};
     }
 
+    async function hangupLiveCall(reference) {
+      if(!confirm('¿Cortar esta llamada ahora? La conversación finalizará inmediatamente.'))return;
+      const response=await fetch(`/api/calls/${reference}/hangup`,{method:'POST',headers:{'x-admin-token':adminToken.value}}); const body=await response.json();
+      if(!response.ok)return alert(body.error);
+      if(liveMonitor?.reference===reference)await stopLiveMonitor(false);
+      await loadContacts();
+    }
+
     function updateMode() {
       adminToken.required = !dryRun.checked;
       buttonLabel.textContent = dryRun.checked ? 'Validar simulación' : 'Iniciar llamada real';
@@ -415,10 +423,12 @@ REGLAS ESTRICTAS:
         const completed=contacts.filter((item) => item.status === 'completed').length;
         document.querySelector('#metric-conversion').textContent = contacts.length ? `${Math.round(completed/contacts.length*100)}%` : '0%';
       }
-      contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><label class="row-check"><input id="select-all" type="checkbox"><span></span></label><span>Teléfono</span><span>Estado</span><span>Nombre</span><span>Empresa</span><span>Keywords</span><span>Web</span><span>Próxima acción</span><span>Nota</span><span>Acción</span><span>Hora</span><span>Duración</span><span>Resultado</span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
+      contactsList.innerHTML = contacts.length ? '<div class="sheet-row sheet-head"><div class="live-controls head-controls"><label class="row-check"><input id="select-all" type="checkbox"><span></span></label><span>Control</span></div><span>Teléfono</span><span>Estado</span><span>Nombre</span><span>Empresa</span><span>Keywords</span><span>Web</span><span>Próxima acción</span><span>Nota</span><span>Acción</span><span>Hora</span><span>Duración</span><span>Resultado</span></div>' : '<p class="notice">Todavía no hay contactos cargados.</p>';
       for (const contact of contacts) {
         const card = document.createElement('article'); card.className = `sheet-row${contact.status === 'in-progress' ? ' is-calling' : contact.status === 'scheduled' ? ' is-scheduled' : ''}`;
-        const checkWrap=document.createElement('label'); checkWrap.className='row-check'; const check=document.createElement('input'); check.type='checkbox'; check.checked=selectedContacts.has(contact.id); check.addEventListener('change',()=>{check.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);updateSelectedCount();}); checkWrap.append(check); card.append(checkWrap);
+        const liveControls=document.createElement('div');liveControls.className='live-controls';const checkWrap=document.createElement('label'); checkWrap.className='row-check'; const check=document.createElement('input'); check.type='checkbox'; check.checked=selectedContacts.has(contact.id); check.addEventListener('change',()=>{check.checked?selectedContacts.add(contact.id):selectedContacts.delete(contact.id);updateSelectedCount();}); checkWrap.append(check);liveControls.append(checkWrap);
+        const monitor=document.createElement('button');monitor.type='button';monitor.className='secondary monitor-button';monitor.disabled=!contact.active_reference;monitor.title=contact.active_reference?'Escuchar esta llamada en vivo':'Disponible solamente mientras la llamada está en conversación';monitor.textContent=liveMonitor?.reference===contact.active_reference?'■ Audio':'🔊 Escuchar';if(liveMonitor?.reference===contact.active_reference)monitor.classList.add('danger');if(contact.active_reference)monitor.addEventListener('click',()=>startLiveMonitor(contact.active_reference,monitor));liveControls.append(monitor);
+        const hangup=document.createElement('button');hangup.type='button';hangup.className='danger hangup-button';hangup.textContent='■ Cortar';hangup.disabled=!contact.active_reference;hangup.title=contact.active_reference?'Finalizar inmediatamente esta llamada':'No hay una llamada activa';if(contact.active_reference)hangup.addEventListener('click',()=>hangupLiveCall(contact.active_reference));liveControls.append(hangup);card.append(liveControls);
         const phone=document.createElement('span'); phone.className='phone-cell'; const phoneText=document.createElement('span'); phoneText.textContent=contact.phone; phone.append(phoneText); if(contact.phone.startsWith('+549')){const wa=document.createElement('a');wa.href=`https://wa.me/${contact.phone.replace(/\D/g,'')}`;wa.target='_blank';wa.rel='noopener';wa.textContent='WhatsApp';phone.append(wa);} card.append(phone);
         card.append(editableCell(contact,'status',contact.status,'select'),editableCell(contact,'personName',contact.person_name),editableCell(contact,'companyName',contact.company_name),editableCell(contact,'keywords',contact.keywords),editableCell(contact,'website',contact.website),editableCell(contact,'action',contact.action,'select'));
         const history=Array.isArray(contact.call_history)?contact.call_history:[];
@@ -428,7 +438,6 @@ REGLAS ESTRICTAS:
         callButton.type = 'button'; callButton.className = 'secondary'; callButton.textContent = 'Llamar';
         callButton.addEventListener('click', () => { form.elements.to.value = contact.phone; selectedContactId = contact.id; window.scrollTo({ top: 0, behavior: 'smooth' }); });
         const actionCell=document.createElement('span'); actionCell.className='call-actions'; actionCell.append(callButton);
-        const monitor=document.createElement('button');monitor.type='button';monitor.className='secondary monitor-button';monitor.disabled=!contact.active_reference;monitor.title=contact.active_reference?'Escuchar esta llamada en vivo':'Disponible solamente mientras la llamada está en conversación';monitor.textContent=liveMonitor?.reference===contact.active_reference?'■ Dejar de escuchar':'🔊 Escuchar';if(liveMonitor?.reference===contact.active_reference)monitor.classList.add('danger');if(contact.active_reference)monitor.addEventListener('click',()=>startLiveMonitor(contact.active_reference,monitor));actionCell.append(monitor);
         card.append(actionCell);
         const started=contact.last_call_started_at?new Date(contact.last_call_started_at):null;
         const hour=document.createElement('span'); hour.className='fixed-cell'; hour.textContent=started?started.toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',dateStyle:'short',timeStyle:'short'}):'—';
