@@ -183,11 +183,17 @@ async function ensureAppointment(call, history) {
 }
 
 app.get('/api/health', (_req, res) => {
+  const apiKeyReady = /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid) && twilioApiKeySecret.length >= 20;
   res.json({
     ok: true,
     mode: twilioAccountSid ? 'configured' : 'simulation-only',
     twilioAccountSidFormat: /^AC[0-9a-f]{32}$/i.test(twilioAccountSid),
     twilioAuthTokenPresent: twilioAuthToken.length >= 20,
+    twilioAuthenticationMethod: apiKeyReady ? 'api-key' : 'auth-token',
+    twilioAccountSidEnding: twilioAccountSid.slice(-4),
+    twilioApiKeySidFormat: /^SK[0-9a-f]{32}$/i.test(twilioApiKeySid),
+    twilioApiKeySidEnding: twilioApiKeySid.slice(-4),
+    twilioApiKeySecretPresent: twilioApiKeySecret.length >= 20,
     twilioPhoneFormat: /^\+\d{10,15}$/.test(twilioPhoneNumber),
     adminConfigured: String(process.env.CALL_ADMIN_TOKEN || '').trim().length >= 16,
     databaseConfigured: databaseConfigured(),
