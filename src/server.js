@@ -375,7 +375,7 @@ app.post('/twilio/voice', (req, res) => {
   const connect = response.connect();
   const relay = connect.conversationRelay({
     url: `${publicUrl.replace(/^http/, 'ws')}/conversation`,
-    welcomeGreeting: greetingForVoice(`Esta llamada será grabada para registrar la conversación.\n\n${call.fixedMessage}`),
+    welcomeGreeting: greetingForVoice(call.fixedMessage),
     welcomeGreetingInterruptible: 'none',
     ttsLanguage: twilioElevenLabsVoiceId ? 'en-US' : 'es-MX',
     ttsProvider: twilioElevenLabsVoiceId ? 'ElevenLabs' : 'Amazon',
