@@ -382,6 +382,7 @@ app.post('/twilio/voice', (req, res) => {
     voice: twilioElevenLabsVoiceId || 'Mia-Neural',
     ...(twilioElevenLabsVoiceId ? { elevenlabsTextNormalization: 'on' } : {}),
     transcriptionLanguage: 'es-US',
+    speechTimeout: 3000,
     interruptible: 'speech',
   });
   relay.parameter({ name: 'reference', value: String(req.query.reference) });
@@ -483,6 +484,18 @@ wss.on('connection', (ws) => {
       call.status = 'completed';
       call.updatedAt = Date.now();
       if (call.contactId && /\b(no me llamen|no me interesa|no quiero)\b/i.test(userText)) updateContact(call.contactId, { status: 'not-interested', action: 'NO_LLAMAR' }).catch(() => {});
+      saveCallProgress(call.reference, call).catch(() => {});
+      return;
+    }
+    const hesitant = /\b(no s[eé]|puede ser|quiz[aá]s|capaz|tal vez|lo (?:voy a|tengo que) pensar|dejame pensarlo|d[eé]jame pensarlo|no estoy seguro|no estoy segura|mmm+|ehh+)\b/i.test(userText);
+    if (hesitant) call.hesitationCount = (call.hesitationCount || 0) + 1;
+    else call.hesitationCount = 0;
+    if (call.hesitationCount >= 2) {
+      const transition = 'Entiendo. Para no quitarte más tiempo, ¿preferís que un asesor te llame en otro momento?';
+      history.push({ role: 'user', content: userText }, { role: 'assistant', content: transition });
+      call.transcript.push({ user: userText, assistant: transition, at: Date.now() });
+      call.updatedAt = Date.now();
+      ws.send(JSON.stringify({ type: 'text', token: speechToken(transition), last: true, interruptible: true }));
       saveCallProgress(call.reference, call).catch(() => {});
       return;
     }
