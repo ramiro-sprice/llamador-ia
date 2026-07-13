@@ -321,6 +321,7 @@ REGLAS ESTRICTAS:
       document.querySelector('#automation-eligible').textContent=body.stats.eligible??0;
       document.querySelector('#automation-last-ten').textContent=body.stats.calls_last_ten_minutes??0;
       automationStart.disabled=body.settings.status==='running'; automationPause.disabled=body.settings.status!=='running'; automationStop.disabled=body.settings.status==='stopped';
+      if(body.settings.status==='running')automationSaveStatus.textContent=body.blockedReason||'Motor activo: buscando el próximo contacto para llamar.';
     }
 
     async function loadAutomationStatus() {

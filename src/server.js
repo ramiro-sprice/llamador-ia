@@ -306,7 +306,18 @@ app.get('/api/automation/status', async (req, res) => {
   try {
     const settings = await getAutomationSettings();
     const stats = await automationStats();
-    res.json({ settings, stats, withinSchedule: automationAllowedNow(settings), activeCalls: [...calls.values()].filter((call) => call.automated && !['completed','failed','busy','no-answer','canceled'].includes(call.status)).length });
+    const withinSchedule = automationAllowedNow(settings);
+    let blockedReason = null;
+    if (settings.status === 'running') {
+      if (!settings.fixed_message || !settings.instructions) blockedReason = 'Falta guardar el mensaje inicial o el guion.';
+      else if (!withinSchedule) blockedReason = 'Esperando el próximo día y horario habilitado.';
+      else if (stats.eligible < 1) blockedReason = 'No hay contactos pendientes elegibles.';
+      else if (stats.active_contacts >= settings.concurrency) blockedReason = 'Esperando que termine una llamada activa.';
+      else if (stats.calls_last_ten_minutes >= settings.max_per_ten_minutes) blockedReason = 'Se alcanzó el máximo configurado para los últimos 10 minutos.';
+      else if (stats.calls_today >= settings.daily_max) blockedReason = 'Se alcanzó el máximo diario configurado.';
+      else if (Date.now() - lastAutomationLaunchAt < settings.delay_seconds * 1000) blockedReason = 'Esperando el intervalo configurado entre llamadas.';
+    }
+    res.json({ settings, stats, withinSchedule, blockedReason, activeCalls: [...calls.values()].filter((call) => call.automated && !['completed','failed','busy','no-answer','canceled'].includes(call.status)).length });
   } catch { res.status(500).json({ error: 'No se pudo consultar la automatización.' }); }
 });
 

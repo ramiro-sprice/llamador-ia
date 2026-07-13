@@ -137,8 +137,17 @@ export async function releaseAutomationContact(id, status = 'pending') {
 
 export async function recoverInterruptedContacts() {
   if (!pool) return 0;
-  const { rowCount } = await pool.query(`UPDATE contacts SET status='callback',updated_at=NOW() WHERE status='in-progress'`);
-  return rowCount;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rowCount } = await client.query(`UPDATE contacts SET status='callback',updated_at=NOW() WHERE status='in-progress'`);
+    await client.query(`UPDATE call_records SET status='failed', ended_at=COALESCE(ended_at,NOW()), summary=COALESCE(summary,'Llamada interrumpida por reinicio del servicio.') WHERE status IN ('queued','initiated','ringing','answered','in-progress')`);
+    await client.query('COMMIT');
+    return rowCount;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
 }
 
 export async function listContacts() {
