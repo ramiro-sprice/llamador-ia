@@ -83,9 +83,7 @@ function greetingForVoice(text) {
 }
 
 function speechToken(text) {
-  if (twilioElevenLabsVoiceId) return String(text || '');
-  const escaped = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-  return `<prosody volume="x-loud">${escaped}</prosody>`;
+  return String(text || '');
 }
 
 function endAfterSpeech(ws, call, text, reason = 'assistant-ended-call') {
