@@ -264,10 +264,13 @@ app.get('/api/contacts', async (req, res) => {
   if (!databaseConfigured()) return res.status(503).json({ error: 'La base de datos todavía no está configurada.' });
   try {
     const contacts = await listContacts();
-    const activeByContact = new Map([...calls.values()]
-      .filter((call) => call.contactId && ['answered','in-progress'].includes(call.status))
-      .map((call) => [call.contactId, call.reference]));
-    res.json({ contacts: contacts.map((contact) => ({ ...contact, active_reference: activeByContact.get(contact.id) || null })) });
+    const activeCalls = [...calls.values()].filter((call) => ['answered','in-progress'].includes(call.status));
+    const activeByContact = new Map(activeCalls.filter((call) => call.contactId).map((call) => [String(call.contactId), call.reference]));
+    const activeByPhone = new Map(activeCalls.map((call) => [String(call.to || '').replace(/[\s()-]/g, ''), call.reference]));
+    res.json({ contacts: contacts.map((contact) => ({
+      ...contact,
+      active_reference: activeByContact.get(String(contact.id)) || activeByPhone.get(String(contact.phone || '').replace(/[\s()-]/g, '')) || null,
+    })) });
   }
   catch { res.status(500).json({ error: 'No se pudieron cargar los contactos.' }); }
 });
