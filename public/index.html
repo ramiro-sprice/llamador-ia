@@ -210,7 +210,7 @@ REGLAS ESTRICTAS:
       </div>
       <div class="crm-toolbar">
         <label>Buscar <input id="contact-search" type="search" placeholder="Nombre, empresa o teléfono"></label>
-        <div class="bulk-actions"><span id="selected-count">0 seleccionados</span><button type="button" id="bulk-call">Llamar</button><button type="button" id="bulk-delete" class="danger">Eliminar</button></div>
+        <div class="bulk-actions"><span id="selected-count">0 seleccionados</span><button type="button" id="bulk-clear" class="secondary">Deseleccionar</button><button type="button" id="bulk-call">Llamar</button><button type="button" id="bulk-delete" class="danger">Eliminar</button></div>
         <span id="save-indicator">Sin cambios pendientes</span>
       </div>
       <form id="import-form" class="import-form">
@@ -424,6 +424,12 @@ REGLAS ESTRICTAS:
     searchInput.addEventListener('input', () => {
       const query=searchInput.value.toLowerCase().trim();
       renderContacts(query ? loadedContacts.filter((contact) => [contact.person_name,contact.company_name,contact.phone].some((value)=>String(value||'').toLowerCase().includes(query))) : loadedContacts, false);
+    });
+
+    document.querySelector('#bulk-clear').addEventListener('click',()=>{
+      selectedContacts.clear();
+      contactsList.querySelectorAll('input[type="checkbox"]').forEach((checkbox)=>{checkbox.checked=false;});
+      updateSelectedCount();
     });
 
     document.querySelector('#bulk-delete').addEventListener('click',async()=>{
