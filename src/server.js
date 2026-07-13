@@ -448,6 +448,7 @@ wss.on('connection', (ws) => {
       if (!call) return ws.close(1008, 'Referencia desconocida');
       call.status = 'in-progress';
       call.updatedAt = Date.now();
+      history.push({ role: 'assistant', content: call.fixedMessage });
       const requestWrapUp = () => {
         if (!call || call.endScheduled || call.appointment?.registered || ws.readyState !== 1) return;
         if (responding) { wrapUpTimer = setTimeout(requestWrapUp, 3000); return; }
@@ -494,10 +495,10 @@ wss.on('connection', (ws) => {
       if (!openai) throw new Error('OPENAI_NOT_CONFIGURED');
       const stream = await openai.responses.create({
         model,
-        instructions: `${call.instructions}\n\n${schedulingContext()}\nREGLAS OBLIGATORIAS PARA AGENDAR: antes de confirmar que un asesor con más experiencia lo volverá a llamar, obtené el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá el cargo de forma natural; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta nombre, empresa, día y franja. No afirmes que la devolución quedó registrada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.${call.wrapUpRequested ? '\nCIERRE POR TIEMPO: quedan aproximadamente dos minutos antes del máximo configurado. No abras temas nuevos. Priorizá acordar la devolución del asesor, confirmar los datos necesarios y despedirte brevemente.' : ''}`,
+        instructions: `${call.instructions}\n\n${schedulingContext()}\nCONTROL ESTRICTO DE RESPUESTA: El mensaje inicial ya fue pronunciado y figura en el historial. Respondé exclusivamente sobre páginas web, tiendas online, presencia en Google, publicidad digital o coordinación de una devolución de llamada de Sprice. No cambies de tema. No inventes ejemplos, estadísticas, diagnósticos, servicios, promociones ni información de la empresa. Contestá primero lo último que dijo la persona y luego hacé, como máximo, una sola pregunta relacionada. Usá como máximo dos frases breves por turno. Si la respuesta fue solamente “sí”, “dale” o “contame”, continuá exactamente con el siguiente paso del flujo: explicá brevemente la importancia de aparecer bien en Google y preguntá si actualmente tienen página web. Si no entendiste, pedí una aclaración breve; nunca rellenes el silencio improvisando.\nREGLAS OBLIGATORIAS PARA AGENDAR: antes de confirmar que un asesor con más experiencia lo volverá a llamar, obtené el nombre de la persona y el nombre de la empresa o emprendimiento. Preguntá el cargo de forma natural; si prefiere no informarlo, podés continuar. Si dice que tiene web, Instagram o Facebook, pedí la dirección o usuario concreto, pero aceptá que prefiera no darlo. Confirmá en voz alta nombre, empresa, día y franja. No afirmes que la devolución quedó registrada: cuando acepte, decí que vas a registrarla y que recibirá confirmación en esta misma llamada.${call.wrapUpRequested ? '\nCIERRE POR TIEMPO: quedan aproximadamente dos minutos antes del máximo configurado. No abras temas nuevos. Priorizá acordar la devolución del asesor, confirmar los datos necesarios y despedirte brevemente.' : ''}`,
         input: history,
         stream: true,
-        max_output_tokens: 250,
+        max_output_tokens: 120,
       });
       let answer = '';
       let pendingToken = '';
